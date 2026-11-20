@@ -1,0 +1,900 @@
+{
+  "posts": [
+    {
+      "id": "d4e5f6a7-1111-4222-8333-444455556666",
+      "slug": "como-construi-ryoko",
+      "title": "Cómo construí Ryoko: Astro, FastAPI y un CMS propio",
+      "excerpt": "Astro, FastAPI y un CMS propio para publicar sin fricción: el razonamiento detrás de Ryoko y su pipeline de build.",
+      "cover": null,
+      "tags": [
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000001",
+          "slug": "astro",
+          "name": "Astro",
+          "description": "Sitios estáticos, islas y build time.",
+          "post_count": 1
+        },
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000002",
+          "slug": "fastapi",
+          "name": "FastAPI",
+          "description": "APIs en Python con tipos y documentación.",
+          "post_count": 1
+        },
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000003",
+          "slug": "arquitectura",
+          "name": "Arquitectura",
+          "description": "Decisiones, tradeoffs y sistemas que se entienden.",
+          "post_count": 1
+        },
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000004",
+          "slug": "cms",
+          "name": "CMS",
+          "description": "Contenido propio, sin dependencias innecesarias.",
+          "post_count": 1
+        }
+      ],
+      "published_at": "2026-11-15T10:00:00Z",
+      "updated_at": "2026-11-15T10:00:00Z",
+      "reading_time_minutes": 8,
+      "featured": true,
+      "publish_status": "published",
+      "type": "article",
+      "seo": {
+        "title": "Cómo construí Ryoko: Astro, FastAPI y un CMS propio",
+        "description": "Un blog estático con CMS propio: Astro en build time, tres APIs FastAPI y un deploy que se dispara solo.",
+        "og_image": null,
+        "canonical_url": null,
+        "noindex": false
+      },
+      "content_md": "Un blog personal no necesita un CMS corporativo. Necesita publicar rápido, no romperse y no obligarte a pelear con plugins cada vez que cambias un título. Este es el razonamiento detrás de Ryoko: un sitio estático con un CMS propio, tres APIs pequeñas y un deploy que se dispara solo.\r\n\r\n## Por qué no WordPress ni un CMS SaaS\r\n\r\nWordPress resuelve el 90% del problema y trae el 100% de la superficie de ataque. Para un blog con tres posts iniciales, mantener PHP, temas, plugins y actualizaciones era más trabajo que escribir el contenido.\r\n\r\nUn CMS SaaS era la otra opción. El problema no era el precio: era que el contenido vive en otra parte. Quería que el blog fuera mío, que el HTML se generara en mi máquina y que el navegador no tuviera que pedir permiso a un servicio externo para mostrar un párrafo.\r\n\r\nLa decisión fue construir algo pequeño y aburrido: FastAPI, PostgreSQL y Astro.\r\n\r\n## Tres APIs, una sola responsabilidad\r\n\r\nEl CMS no es un monolito. Son tres servicios con límites claros:\r\n\r\n| API | Responsabilidad | Lo que no hace |\r\n|---|---|---|\r\n| Content API | Posts, proyectos, media, tags | Métricas |\r\n| Webhook API | Eventos firmados, reintentos, auditoría | Contenido |\r\n| Metrics API | Visitas, clicks, agregados GraphQL | Leer contenido |\r\n\r\nSepararlas evita que un pico de métricas afecte la publicación. También permite desplegarlas y escalarlas por separado.\r\n\r\nEl contrato vive en un solo archivo. Si un campo no está ahí, no existe. Esa regla suena rígida hasta que dos servicios empiezan a interpretar `status` de formas distintas.\r\n\r\n## Astro en build time\r\n\r\nEl navegador nunca consulta la Content API. Astro pide los datos durante el build, valida la respuesta con Zod y genera HTML estático.\r\n\r\n```ts\r\n// src/lib/cms/client.ts\r\nexport async function cmsFetch<T>(path: string): Promise<T> {\r\n  const response = await fetch(new URL(path, CMS_API_URL), {\r\n    headers: { Authorization: `Bearer ${CMS_API_TOKEN}` },\r\n    signal: AbortSignal.timeout(10_000),\r\n  });\r\n\r\n  if (!response.ok) {\r\n    throw new Error(`CMS respondió ${response.status} en ${path}`);\r\n  }\r\n\r\n  return response.json() as Promise<T>;\r\n}\r\n```\r\n\r\nSi la API falla, el build falla y Vercel conserva el deploy anterior. Prefiero un build rojo a un sitio con la mitad del contenido.\r\n\r\nEl costo es que publicar tarda un par de minutos. La ventaja es que la visita promedio descarga HTML, CSS y unas cuantas imágenes: nada de JavaScript esperando datos.\r\n\r\n## Publicar: CMS → webhook → n8n → Vercel\r\n\r\nEl flujo completo es corto:\r\n\r\n1. Escribo el post en el panel del CMS.\r\n2. La Content API guarda el borrador y calcula el tiempo de lectura.\r\n3. Al publicar, emite un evento `post.published`.\r\n4. La Webhook API valida la firma HMAC y lo encola.\r\n5. n8n recibe el evento y llama al Deploy Hook de Vercel.\r\n6. Vercel reconstruye el sitio y el post aparece.\r\n\r\nLa firma se calcula sobre `timestamp + \".\" + body` y se compara en tiempo constante. Un evento duplicado responde `202` sin reprocesar. Si n8n falla, el evento queda en la cola con intentos y último error.\r\n\r\n## Métricas sin cookies\r\n\r\nLas métricas son lo único que se envía desde el navegador. No uso cookies ni identificadores persistentes. El `session_id` se genera por sesión y el servidor resuelve el sitio con una key pública.\r\n\r\nEl envío usa `fetch` con `keepalive: true`:\r\n\r\n```ts\r\nawait fetch(METRICS_API_URL, {\r\n  method: \"POST\",\r\n  keepalive: true,\r\n  headers: {\r\n    \"Content-Type\": \"application/json\",\r\n    \"X-Site-Key\": METRICS_SITE_KEY,\r\n  },\r\n  body: JSON.stringify({\r\n    query: TRACK_EVENT,\r\n    variables: { input: event },\r\n  }),\r\n});\r\n```\r\n\r\nNo uso `navigator.sendBeacon` porque no permite enviar el header `X-Site-Key` sin convertir la petición en un formulario. El API resuelve el `site_id` desde la key: el cliente no elige a qué sitio pertenecen sus eventos.\r\n\r\n> **Nota:** si el usuario tiene Do Not Track activo o `navigator.connection.saveData`, el script no envía nada. El sitio funciona igual.\r\n\r\n## Lo que aprendí\r\n\r\n- **El contrato es el producto.** Cambiar `status` por `publish_status` y `lifecycle_status` después de escribir los schemas fue barato; hacerlo con datos reales habría dolido.\r\n- **Validar temprano ahorra builds.** Zod señala el endpoint, el campo y el valor recibido. Un error claro vale más que un `cannot read property of undefined`.\r\n- **Publicar es el flujo crítico.** El hero se ve bonito, pero si publicar requiere cinco pasos manuales, el blog se muere en dos semanas.\r\n\r\nTodavía falta: búsqueda, comentarios y un modo de lectura claro. Nada de eso está en v1. Si algún día llega, tiene que justificar su peso.\r\n",
+      "author": {
+        "id": "1f2e3d4c-5b6a-4978-8e7d-6c5b4a3f2e1d",
+        "name": "Ricardo Reyes Gómez",
+        "alias": "Ryoko",
+        "avatar": {
+          "id": "7d1a4c2e-8f3b-4a5d-9c6e-1b2a3c4d5e6f",
+          "url": "https://media.ryuheirg.dev/mock/portrait.jpeg",
+          "width": 972,
+          "height": 1296,
+          "mime_type": "image/jpeg",
+          "size_bytes": 116324,
+          "alt": "Retrato de Ricardo Reyes Gómez con suéter negro",
+          "blurhash": null,
+          "created_at": "2026-11-15T18:00:00Z"
+        },
+        "bio": "Estudiante de ITID en UPChiapas. Full stack con enfoque en seguridad.",
+        "github_url": "https://github.com/RyuheiRG",
+        "linkedin_url": "https://www.linkedin.com/in/ryuhei-rg/"
+      }
+    },
+    {
+      "id": "d4e5f6a7-2222-4222-8333-444455556666",
+      "slug": "zero-trust-aplicado-a-datos",
+      "title": "Zero Trust aplicado a datos: Frame-Data-Bayes",
+      "excerpt": "Un CSV es una superficie de ataque: validación, detección de tipos e inferencia bayesiana en Frame-Data-Bayes.",
+      "cover": null,
+      "tags": [
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000005",
+          "slug": "python",
+          "name": "Python",
+          "description": "Datos, scripts y backend.",
+          "post_count": 1
+        },
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000006",
+          "slug": "datos",
+          "name": "Datos",
+          "description": "Ingesta, validación y análisis.",
+          "post_count": 1
+        },
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000007",
+          "slug": "bayes",
+          "name": "Bayes",
+          "description": "Inferencia probabilística aplicada.",
+          "post_count": 1
+        },
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000008",
+          "slug": "seguridad",
+          "name": "Seguridad",
+          "description": "Zero Trust, validación y superficie de ataque.",
+          "post_count": 2
+        }
+      ],
+      "published_at": "2026-11-08T10:00:00Z",
+      "updated_at": "2026-11-08T10:00:00Z",
+      "reading_time_minutes": 7,
+      "featured": false,
+      "publish_status": "published",
+      "type": "article",
+      "seo": {
+        "title": "Zero Trust aplicado a datos: Frame-Data-Bayes",
+        "description": "Validar antes de modelar: pipeline de ingesta, detección de tipos e inferencia bayesiana para datos hostiles.",
+        "og_image": null,
+        "canonical_url": null,
+        "noindex": false
+      },
+      "content_md": "Un CSV no es un archivo inocente. Puede traer tipos inconsistentes, columnas duplicadas, filas vacías, fechas en tres formatos y un número de teléfono que Excel convirtió en notación científica. Modelar encima de eso es construir sobre arena.\r\n\r\nFrame-Data-Bayes nació de esa idea: tratar cada dataset como un entorno hostil y validar antes de calcular.\r\n\r\n## Qué significa Zero Trust en datos\r\n\r\nZero Trust normalmente se explica con redes: no confíes en nada dentro del perímetro, verifica cada solicitud. En datos la idea se traduce igual: no confíes en la forma del archivo, verifica cada columna antes de usarla.\r\n\r\nEso implica cuatro reglas:\r\n\r\n1. El archivo se valida antes de entrar al pipeline.\r\n2. El tipo de cada columna se detecta, no se asume.\r\n3. Las excepciones se manejan por fila, no se ignoran.\r\n4. El modelo no recibe datos que no pasaron validación.\r\n\r\n## Pipeline de ingesta\r\n\r\nEl flujo es lineal y cada etapa tiene una responsabilidad:\r\n\r\n```text\r\nCSV → Validación → Detección de tipos → Limpieza → Bayes → Clasificación → Visualización\r\n```\r\n\r\nLa validación revisa integridad del archivo, codificación, delimitador y número de columnas. Después viene la detección de tipos: numéricos, categóricos, temporales y binarios.\r\n\r\n```python\r\ndef detect_column_kind(series: pd.Series) -> str:\r\n    non_null = series.dropna()\r\n    if non_null.empty:\r\n        return \"empty\"\r\n    if pd.api.types.is_bool_dtype(non_null):\r\n        return \"boolean\"\r\n    if pd.api.types.is_numeric_dtype(non_null):\r\n        return \"numeric\"\r\n    if pd.api.types.is_datetime64_any_dtype(non_null):\r\n        return \"temporal\"\r\n\r\n    parsed = pd.to_datetime(non_null, errors=\"coerce\", format=\"mixed\")\r\n    if parsed.notna().mean() > 0.9:\r\n        return \"temporal\"\r\n    return \"categorical\"\r\n```\r\n\r\nLa regla del 90% evita que una fecha mal escrita convierta toda una columna en texto. Es una decisión conservadora: prefiero una columna categórica que un `NaT` silencioso.\r\n\r\n## Bayes sin fórmulas innecesarias\r\n\r\nEl Teorema de Bayes actualiza una creencia cuando llega evidencia. En el proyecto se usa para calcular la probabilidad de una clase dado un conjunto de características.\r\n\r\nLa fórmula completa es corta:\r\n\r\n```text\r\nP(A|B) = P(B|A) * P(A) / P(B)\r\n```\r\n\r\nLo interesante no es memorizarla, sino entender qué significa cada término:\r\n\r\n- `P(A)` es lo que creía antes de ver los datos.\r\n- `P(B|A)` es qué tan probable es la evidencia si la clase es A.\r\n- `P(B)` normaliza para que las probabilidades sumen uno.\r\n\r\nEn un dataset pequeño, la parte difícil no es la fórmula: es elegir variables que no estén correlacionadas y detectar cuándo la evidencia es demasiado débil para concluir algo.\r\n\r\n## Gaussian Naïve Bayes para anomalías\r\n\r\nLa clasificación usa Gaussian Naïve Bayes. La parte “naïve” asume independencia entre variables. Es una mentira útil: simplifica el cálculo y funciona sorprendentemente bien cuando las variables aportan señales distintas.\r\n\r\nEl pipeline separa entrenamiento y evaluación. La matriz de confusión se muestra tal cual, sin esconder falsos positivos. En un contexto académico, un modelo que explica sus errores vale más que uno con mejor accuracy y cero interpretabilidad.\r\n\r\n## Visualizaciones que se entienden\r\n\r\nEl panel tiene tres vistas:\r\n\r\n- Histogramas por variable para ver distribuciones.\r\n- Series temporales para detectar cambios de comportamiento.\r\n- Matriz de confusión para entender dónde falla el clasificador.\r\n\r\nStreamlit permitió construirlo rápido, pero también impone límites: el estado se pierde con facilidad y el control fino de la UI es limitado. Para v1 fue suficiente; para una herramienta de producción no lo sería.\r\n\r\n## Limitaciones y siguientes pasos\r\n\r\n- El proyecto corre local; no hay demo pública.\r\n- La detección de tipos es heurística, no perfecta.\r\n- No hay tests de integración con datasets reales grandes.\r\n- La explicación de Bayes en la UI puede mejorar.\r\n\r\nEl siguiente paso no es agregar modelos más complejos. Es agregar datasets de prueba difíciles y medir cuántas veces el pipeline se equivoca al inferir tipos. Eso vale más que una métrica bonita en un notebook.\r\n",
+      "author": {
+        "id": "1f2e3d4c-5b6a-4978-8e7d-6c5b4a3f2e1d",
+        "name": "Ricardo Reyes Gómez",
+        "alias": "Ryoko",
+        "avatar": {
+          "id": "7d1a4c2e-8f3b-4a5d-9c6e-1b2a3c4d5e6f",
+          "url": "https://media.ryuheirg.dev/mock/portrait.jpeg",
+          "width": 972,
+          "height": 1296,
+          "mime_type": "image/jpeg",
+          "size_bytes": 116324,
+          "alt": "Retrato de Ricardo Reyes Gómez con suéter negro",
+          "blurhash": null,
+          "created_at": "2026-11-15T18:00:00Z"
+        },
+        "bio": "Estudiante de ITID en UPChiapas. Full stack con enfoque en seguridad.",
+        "github_url": "https://github.com/RyuheiRG",
+        "linkedin_url": "https://www.linkedin.com/in/ryuhei-rg/"
+      }
+    },
+    {
+      "id": "d4e5f6a7-3333-4222-8333-444455556666",
+      "slug": "secureup-verificar-contrasenas-sin-enviarlas",
+      "title": "SecureUP: cómo verificar contraseñas sin enviarlas",
+      "excerpt": "Cómo verificar contraseñas filtradas sin enviarlas, analizar QR en local y guardar el historial en el dispositivo.",
+      "cover": null,
+      "tags": [
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000009",
+          "slug": "kotlin",
+          "name": "Kotlin",
+          "description": "Android con Jetpack Compose.",
+          "post_count": 1
+        },
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000010",
+          "slug": "android",
+          "name": "Android",
+          "description": "Apps móviles y seguridad local.",
+          "post_count": 1
+        },
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000008",
+          "slug": "seguridad",
+          "name": "Seguridad",
+          "description": "Zero Trust, validación y superficie de ataque.",
+          "post_count": 2
+        },
+        {
+          "id": "a1b2c3d4-0001-4001-8001-000000000011",
+          "slug": "hibp",
+          "name": "HIBP",
+          "description": "Contraseñas filtradas sin exponerlas.",
+          "post_count": 1
+        }
+      ],
+      "published_at": "2026-11-01T10:00:00Z",
+      "updated_at": "2026-11-01T10:00:00Z",
+      "reading_time_minutes": 9,
+      "featured": false,
+      "publish_status": "published",
+      "type": "article",
+      "seo": {
+        "title": "SecureUP: verificar contraseñas sin enviarlas",
+        "description": "k-anonimato, SHA-1 y análisis local de URLs: cómo construir una app de seguridad que no recolecta secretos.",
+        "og_image": null,
+        "canonical_url": null,
+        "noindex": false
+      },
+      "content_md": "La mayoría de las apps de seguridad piden tu contraseña para “verificarla”. Ese es el problema, no la solución. SecureUP parte de una regla simple: la contraseña completa nunca sale del dispositivo.\r\n\r\n## El problema de reutilizar contraseñas\r\n\r\nLa reutilización es cómoda y peligrosa. Cuando un servicio se filtra, los atacantes prueban la misma combinación en bancos, correos y redes sociales. La víctima no necesita haber hecho nada malo: basta con que el sitio filtró una base de datos.\r\n\r\nUna app puede ayudar de dos formas:\r\n\r\n1. Decirte si una contraseña aparece en filtraciones conocidas.\r\n2. Avisarte antes de abrir un enlace sospechoso.\r\n\r\nNinguna de las dos requiere que la app se quede con tus credenciales.\r\n\r\n## HIBP y k-anonimato\r\n\r\nHave I Been Pwned expone un endpoint para consultar contraseñas filtradas. El detalle importante es cómo: no envías la contraseña, envías un prefijo de su hash SHA-1.\r\n\r\nEl flujo es:\r\n\r\n1. Calculas el SHA-1 de la contraseña.\r\n2. Tomas los primeros cinco caracteres del hash.\r\n3. Consultas el rango correspondiente.\r\n4. Comparas el resto del hash localmente.\r\n\r\nEl servidor devuelve cientos de sufijos posibles. No sabe cuál es el tuyo. Eso es k-anonimato: tu consulta se pierde entre muchas parecidas.\r\n\r\n```kotlin\r\nprivate fun sha1Prefix(password: String): String {\r\n    val digest = MessageDigest.getInstance(\"SHA-1\")\r\n    val hash = digest.digest(password.toByteArray(Charsets.UTF_8))\r\n    val hex = hash.joinToString(\"\") { \"%02X\".format(it) }\r\n    return hex.take(5)\r\n}\r\n```\r\n\r\nSHA-1 está roto para firmas, pero aquí se usa como función de búsqueda, no como prueba de integridad. El prefijo de cinco caracteres reduce la consulta a una fracción del espacio total y permite comparar sin revelar el secreto.\r\n\r\n## Análisis local de URLs y QR\r\n\r\nEl escáner de QR no abre la URL directamente. Primero extrae el contenido y lo analiza con reglas locales:\r\n\r\n- Esquema permitido (`https`, no `javascript:` ni `file:`).\r\n- HTTPS obligatorio para enlaces externos.\r\n- IP como host en lugar de dominio.\r\n- Punycode y caracteres homógrafos.\r\n- User-info en la URL (`https://banco.com@malicioso.example`).\r\n- Acortadores conocidos.\r\n- Longitud y cantidad de subdominios.\r\n\r\nSolo si el enlace pasa las reglas se ofrece el botón para abrirlo en el navegador. El análisis es heurístico: no reemplaza a un servicio de reputación, pero detiene los casos obvios sin enviar la URL a ningún servidor.\r\n\r\n## Historial con Room\r\n\r\nEl historial vive en el dispositivo. Room guarda el resultado del escaneo, la fecha y el nivel de riesgo. No hay cuenta, no hay sincronización y no hay backend propio todavía.\r\n\r\nEsa decisión tiene un costo: si cambias de teléfono, pierdes el historial. También tiene una ventaja: no hay una base de datos central con los enlaces que escaneaste.\r\n\r\nEl PDF se genera con `PdfDocument` y se comparte con Storage Access Framework. El archivo sale del dispositivo solo cuando el usuario lo decide.\r\n\r\n## Lo que falta\r\n\r\nSecureUP es funcional, pero no está terminado:\r\n\r\n- El backend propio no existe; el login usa un repositorio simulado.\r\n- La bóveda de contraseñas está pospuesta.\r\n- El análisis de URLs es heurístico, no un servicio de reputación.\r\n- La app no está publicada en Play Store.\r\n\r\nLas 71 pruebas unitarias y el lint sin errores no convierten el proyecto en producto. Convierten el código en algo que se puede seguir tocando sin miedo.\r\n\r\nLa lección más útil fue esta: la seguridad de una app también está en lo que no hace. No recolectar contraseñas, no enviar URLs y no pedir una cuenta son decisiones de diseño, no features.\r\n",
+      "author": {
+        "id": "1f2e3d4c-5b6a-4978-8e7d-6c5b4a3f2e1d",
+        "name": "Ricardo Reyes Gómez",
+        "alias": "Ryoko",
+        "avatar": {
+          "id": "7d1a4c2e-8f3b-4a5d-9c6e-1b2a3c4d5e6f",
+          "url": "https://media.ryuheirg.dev/mock/portrait.jpeg",
+          "width": 972,
+          "height": 1296,
+          "mime_type": "image/jpeg",
+          "size_bytes": 116324,
+          "alt": "Retrato de Ricardo Reyes Gómez con suéter negro",
+          "blurhash": null,
+          "created_at": "2026-11-15T18:00:00Z"
+        },
+        "bio": "Estudiante de ITID en UPChiapas. Full stack con enfoque en seguridad.",
+        "github_url": "https://github.com/RyuheiRG",
+        "linkedin_url": "https://www.linkedin.com/in/ryuhei-rg/"
+      }
+    }
+  ],
+  "projects": [
+    {
+      "id": "c1d2e3f4-1111-4222-8333-444455556666",
+      "slug": "frame-data-bayes",
+      "title": "Frame-Data-Bayes",
+      "summary": "Motor de análisis probabilístico y clasificación estadística que trata cada CSV como un entorno hostil.",
+      "cover": null,
+      "stack": [
+        "Python",
+        "Pandas",
+        "Scikit-Learn",
+        "Streamlit",
+        "Bayes"
+      ],
+      "year": 2026,
+      "updated_at": "2026-11-15T10:00:00Z",
+      "publish_status": "published",
+      "lifecycle_status": "live",
+      "featured": true,
+      "repo_url": "https://github.com/RyuheiRG/frame-data-bayes",
+      "demo_url": null,
+      "sort_order": 1,
+      "seo": {
+        "title": "Frame-Data-Bayes — Case study",
+        "description": "Validación de datos, detección de tipos e inferencia bayesiana para analizar CSV hostiles sin inventar métricas.",
+        "og_image": null,
+        "canonical_url": null,
+        "noindex": false
+      },
+      "case_study_md": "Los datasets académicos llegan como llegan: un CSV exportado de otro sistema, con columnas que nadie documentó y tipos que cambian entre filas. Frame-Data-Bayes existe para analizar esos archivos sin asumir que están limpios.\r\n\r\n## Contexto\r\n\r\nEl proyecto es un motor de análisis probabilístico y clasificación estadística. Combina validación de datos, detección automática de tipos, inferencia bayesiana y visualizaciones interactivas en Streamlit.\r\n\r\nEs individual y corre local. No hay demo pública porque el valor está en el pipeline, no en una URL.\r\n\r\n## Problema\r\n\r\nUn análisis estadístico confiable necesita datos confiables. Si el pipeline acepta cualquier columna como numérica, el modelo aprende ruido y las visualizaciones mienten con estilo.\r\n\r\nEl problema tenía tres partes:\r\n\r\n1. Validar la estructura del archivo antes de leerlo completo.\r\n2. Detectar el tipo real de cada columna sin intervención manual.\r\n3. Explicar el resultado del modelo, no solo mostrar una predicción.\r\n\r\n## Restricciones\r\n\r\n- Tiempo de una materia, no de un producto.\r\n- Stack académico: Python, Pandas, NumPy, Scikit-Learn, Streamlit.\r\n- Datasets pequeños y heterogéneos.\r\n- Sin backend ni base de datos.\r\n- La interfaz debía caber en una sola app.\r\n\r\n## Decisiones\r\n\r\n### 1. Validar antes de modelar\r\n\r\nLa ingesta revisa codificación, delimitador, columnas y filas. Si el archivo no cumple el mínimo, se detiene con un mensaje claro. Prefiero un error explícito a un `NaN` que se propaga hasta la matriz de confusión.\r\n\r\n### 2. Detectar tipos con reglas, no con fechas mágicas\r\n\r\nLa detección combina el tipo declarado por Pandas con una prueba de parseo. Una columna se considera temporal si más del 90% de sus valores se pueden interpretar como fecha. El umbral es conservador: evita convertir identificadores en fechas.\r\n\r\n### 3. Implementar Bayes explícitamente\r\n\r\nEl Teorema de Bayes se calcula paso a paso, no se importa como caja negra. Eso permite mostrar los términos en la UI y explicar por qué una probabilidad sube o baja.\r\n\r\n### 4. Usar Gaussian Naïve Bayes para clasificación\r\n\r\nPara anomalías, Gaussian Naïve Bayes ofrece un balance razonable entre simplicidad e interpretabilidad. La matriz de confusión se muestra completa, con falsos positivos incluidos.\r\n\r\n### 5. Visualizaciones antes que métricas\r\n\r\nEl panel prioriza histogramas, series temporales y matrices. Un número de accuracy sin contexto no dice nada; una distribución mal segmentada sí.\r\n\r\n## Arquitectura\r\n\r\n```text\r\nCSV\r\n │\r\n ▼\r\nValidación de integridad\r\n │\r\n ▼\r\nDetección de tipos ──► Limpieza\r\n │                      │\r\n ▼                      ▼\r\nEDA                 Bayes / Gaussian NB\r\n │                      │\r\n └──────► Visualización ◄┘\r\n```\r\n\r\nCada etapa es una función pura sobre un `DataFrame`. La UI solo orquesta: no contiene lógica de validación ni de cálculo.\r\n\r\n## Implementación\r\n\r\nEl panel de ingesta muestra el archivo, el número de filas y columnas, y los problemas detectados. El panel EDA permite filtrar por tipo de columna. El panel Bayes muestra la probabilidad previa, la verosimilitud y la posterior.\r\n\r\nLa parte más delicada fue la limpieza: eliminar filas vacías sin perder información válida, normalizar nombres de columnas y separar categóricas de numéricas sin convertir todo a texto.\r\n\r\n## Resultado\r\n\r\nFunciona con datasets pequeños y medianos. Detecta columnas numéricas, categóricas, temporales y binarias. Genera visualizaciones y clasificaciones explicables.\r\n\r\nLo que no hace:\r\n\r\n- No maneja archivos gigantes.\r\n- No tiene tests con datasets reales.\r\n- No persiste resultados entre sesiones.\r\n- No es una herramienta multiusuario.\r\n\r\n## Aprendizajes\r\n\r\n- Validar antes de modelar ahorra horas de debugging.\r\n- La interpretabilidad importa más que la accuracy en un contexto académico.\r\n- Un pipeline claro se puede explicar; un notebook no.\r\n\r\n## Qué haría diferente\r\n\r\n- Escribiría tests de integración con archivos sucios desde el primer día.\r\n- Separaría la UI del pipeline en paquetes desde el inicio.\r\n- Agregaría un modo de exportación de reportes para no depender de la sesión de Streamlit.\r\n",
+      "gallery": [],
+      "github": null,
+      "role": "Desarrollo, datos, UI",
+      "team": [
+        "Individual"
+      ],
+      "learnings": [
+        "Validar antes de modelar ahorra horas de debugging.",
+        "La interpretabilidad importa más que la accuracy en un contexto académico.",
+        "Un pipeline claro se puede explicar; un notebook no."
+      ]
+    },
+    {
+      "id": "c1d2e3f4-2222-4222-8333-444455556666",
+      "slug": "secureup",
+      "title": "SecureUP",
+      "summary": "App Android de seguridad digital personal: verifica contraseñas filtradas sin enviarlas y analiza QR en local.",
+      "cover": {
+        "id": "9b2c5d3f-1a4e-4f6b-8c7d-2e3f4a5b6c7d",
+        "url": "https://media.ryuheirg.dev/mock/secureup.png",
+        "width": 1080,
+        "height": 2400,
+        "mime_type": "image/png",
+        "size_bytes": 132804,
+        "alt": "Pantalla de inicio de SecureUP con Security Score de 70 sobre 100",
+        "blurhash": null,
+        "created_at": "2026-11-15T18:00:00Z"
+      },
+      "stack": [
+        "Kotlin",
+        "Jetpack Compose",
+        "Room",
+        "HIBP",
+        "MVVM"
+      ],
+      "year": 2026,
+      "updated_at": "2026-11-15T10:00:00Z",
+      "publish_status": "published",
+      "lifecycle_status": "wip",
+      "featured": true,
+      "repo_url": "https://github.com/RyuheiRG/SecureUP/tree/develop",
+      "demo_url": null,
+      "sort_order": 2,
+      "seo": {
+        "title": "SecureUP — Case study",
+        "description": "k-anonimato con HIBP, análisis local de URLs y Room: una app de seguridad que no recolecta credenciales.",
+        "og_image": null,
+        "canonical_url": null,
+        "noindex": false
+      },
+      "case_study_md": "SecureUP es una app Android de seguridad digital personal. Verifica contraseñas filtradas sin enviarlas, analiza códigos QR antes de abrirlos y guarda el historial en el dispositivo.\r\n\r\n## Contexto\r\n\r\nEl proyecto nace de una pregunta incómoda: ¿por qué las apps de seguridad piden justo el dato que deberían proteger? La respuesta suele ser comodidad. SecureUP intenta resolver el problema sin recolectar credenciales.\r\n\r\nEs individual, está escrita en Kotlin con Jetpack Compose y usa Room para persistencia local. El backend propio todavía no existe.\r\n\r\n## Problema\r\n\r\nLas personas reutilizan contraseñas y abren enlaces sin verificar. Una app puede ayudar en ambos casos, pero solo si el usuario confía en ella. Y la confianza empieza por no pedir más de lo necesario.\r\n\r\n## Restricciones\r\n\r\n- Android nativo, sin backend propio.\r\n- Una sola persona desarrollando.\r\n- Tiempo de materia.\r\n- La app debía funcionar sin conexión para el historial.\r\n- El análisis de URLs no podía depender de un servicio externo.\r\n\r\n## Decisiones\r\n\r\n### 1. k-anonimato para contraseñas\r\n\r\nLa verificación usa HIBP Pwned Passwords. Solo se envía el prefijo SHA-1 de cinco caracteres. La contraseña completa nunca abandona el dispositivo y la comparación final es local.\r\n\r\n### 2. Análisis local de URLs\r\n\r\nLas reglas revisan esquema, HTTPS, IP como host, punycode, user-info, acortadores y longitud. Es heurística, no reputación, pero cubre los ataques más comunes sin enviar la URL a terceros.\r\n\r\n### 3. Solo las URLs seguras se pueden abrir\r\n\r\nLa app no bloquea el enlace: deja de ofrecer el botón. El usuario puede copiarlo y abrirlo por su cuenta, pero la acción segura es la ruta por defecto.\r\n\r\n### 4. Room para el historial\r\n\r\nEl historial vive en el dispositivo. No hay cuenta ni sincronización. El costo es perderlo al cambiar de teléfono; la ventaja es que no existe una base central de enlaces escaneados.\r\n\r\n### 5. MVVM sin capas decorativas\r\n\r\nLa arquitectura es UI → ViewModel → Repository → Room/Retrofit/ML Kit. No hay capa de casos de uso para un proyecto de este tamaño; agregarla habría sido ceremonia sin beneficio.\r\n\r\n## Arquitectura\r\n\r\n```text\r\nCompose UI\r\n   │\r\n   ▼\r\nViewModel (StateFlow)\r\n   │\r\n   ▼\r\nRepository\r\n   ├── Room (historial)\r\n   ├── Retrofit (HIBP)\r\n   └── ML Kit (QR)\r\n```\r\n\r\n## Implementación\r\n\r\nLa pantalla de inicio muestra un Security Score calculado con los escaneos recientes. La pantalla de brechas consulta HIBP y muestra cuántas veces aparece la contraseña. El escáner usa CameraX y ML Kit, y el análisis de la URL ocurre antes de habilitar cualquier acción.\r\n\r\nEl PDF se genera con `PdfDocument` y se comparte con Storage Access Framework. No requiere permisos de almacenamiento amplios.\r\n\r\n## Resultado\r\n\r\n- 71 pruebas unitarias.\r\n- Lint sin errores.\r\n- Flujo completo de verificación de contraseña y escaneo de QR.\r\n- Historial local funcional.\r\n- Exportación a PDF.\r\n\r\nLo que falta:\r\n\r\n- Backend propio.\r\n- Bóveda de contraseñas.\r\n- Servicio de reputación de URLs.\r\n- Publicación en Play Store.\r\n\r\n## Aprendizajes\r\n\r\n- El k-anonimato es una decisión de diseño, no solo de criptografía.\r\n- El historial local puede dar valor sin backend.\r\n- La seguridad de una app también está en lo que no hace.\r\n\r\n## Qué haría diferente\r\n\r\n- Definiría el contrato del backend antes de simular el repositorio.\r\n- Agregaría tests de instrumentación para los flujos de cámara.\r\n- Separaría las reglas de análisis de URLs en un módulo reutilizable.\r\n",
+      "gallery": [
+        {
+          "id": "9b2c5d3f-1a4e-4f6b-8c7d-2e3f4a5b6c7d",
+          "url": "https://media.ryuheirg.dev/mock/secureup.png",
+          "width": 1080,
+          "height": 2400,
+          "mime_type": "image/png",
+          "size_bytes": 132804,
+          "alt": "Pantalla de inicio de SecureUP mostrando el Security Score y los accesos rápidos",
+          "blurhash": null,
+          "created_at": "2026-11-15T18:00:00Z"
+        }
+      ],
+      "github": null,
+      "role": "Desarrollo Android",
+      "team": [
+        "Individual"
+      ],
+      "learnings": [
+        "El k-anonimato es una decisión de diseño, no solo de criptografía.",
+        "El historial local puede dar valor sin backend.",
+        "La seguridad de una app también está en lo que no hace."
+      ]
+    },
+    {
+      "id": "c1d2e3f4-3333-4222-8333-444455556666",
+      "slug": "vaca-cubica",
+      "title": "Vaca Cúbica",
+      "summary": "Sistema de Gestión Bovina con monorepositorio React + FastAPI y despliegue en AWS con RDS privado.",
+      "cover": {
+        "id": "5e3f7a1b-2c4d-4e5f-9a6b-3c4d5e6f7a8b",
+        "url": "https://media.ryuheirg.dev/mock/vaca-cubica.png",
+        "width": 1918,
+        "height": 825,
+        "mime_type": "image/png",
+        "size_bytes": 973540,
+        "alt": "Pantalla de inicio de sesión de Vaca Cúbica con un ternero comiendo pasto",
+        "blurhash": null,
+        "created_at": "2026-11-15T18:00:00Z"
+      },
+      "stack": [
+        "React",
+        "Vite",
+        "FastAPI",
+        "MySQL",
+        "AWS"
+      ],
+      "year": 2026,
+      "updated_at": "2026-11-15T10:00:00Z",
+      "publish_status": "published",
+      "lifecycle_status": "live",
+      "featured": true,
+      "repo_url": "https://github.com/RyuheiRG/vaca-cubica",
+      "demo_url": "https://vaca-cubica.vercel.app",
+      "sort_order": 3,
+      "seo": {
+        "title": "Vaca Cúbica — Case study",
+        "description": "Monorepo React + FastAPI, MySQL en Amazon RDS y despliegue en AWS con una VPC privada.",
+        "og_image": null,
+        "canonical_url": null,
+        "noindex": false
+      },
+      "case_study_md": "Vaca Cúbica es un Sistema de Gestión Bovina (S.G.B.) construido como monorepositorio: frontend React, backend FastAPI y despliegue en AWS con una base de datos privada.\r\n\r\n## Contexto\r\n\r\nEl proyecto nació en una materia de desarrollo web con un requisito claro: gestionar información bovina con una arquitectura que no fuera un CRUD improvisado. El equipo éramos tres personas y el alcance incluía autenticación, CRUD, despliegue y documentación.\r\n\r\n## Problema\r\n\r\nLa información del ganado suele vivir en hojas de cálculo y libretas. Un sistema centralizado necesita resolver tres cosas: quién puede ver los datos, cómo se mantienen consistentes y dónde corre la base de datos.\r\n\r\n## Restricciones\r\n\r\n- Equipo de tres personas.\r\n- Tiempo de un cuatrimestre.\r\n- Presupuesto limitado para infraestructura.\r\n- Stack definido por la materia: React, FastAPI, MySQL.\r\n- Despliegue real, no solo local.\r\n\r\n## Decisiones\r\n\r\n### 1. Monorepo con fronteras claras\r\n\r\nFrontend y backend viven en el mismo repositorio, pero en carpetas separadas. Compartir configuración es fácil; mezclar responsabilidades no.\r\n\r\n### 2. FastAPI + SQLAlchemy async\r\n\r\nFastAPI da validación con Pydantic y documentación OpenAPI sin esfuerzo. SQLAlchemy async con `asyncmy` mantiene el backend no bloqueante.\r\n\r\n### 3. MySQL local, RDS en producción\r\n\r\nEl desarrollo usa MySQL 8.4 local con DBngin. Producción usa Amazon RDS dentro de una VPC privada, sin acceso público.\r\n\r\n### 4. EC2 como nodo de cómputo\r\n\r\nLa API corre en una instancia EC2. RDS solo acepta conexiones desde la VPC y los security groups están restringidos. No es una arquitectura empresarial, pero es una separación real entre cómputo y datos.\r\n\r\n### 5. Pydantic falla al arrancar\r\n\r\nSi faltan variables críticas, la app no inicia. Es mejor un error de configuración visible que un secreto vacío en producción.\r\n\r\n## Arquitectura\r\n\r\n```text\r\nReact + Vite\r\n     │  HTTPS\r\n     ▼\r\nFastAPI (EC2)\r\n     │\r\n     ▼\r\nSQLAlchemy async\r\n     │\r\n     ▼\r\nMySQL (Amazon RDS, VPC privada)\r\n```\r\n\r\n## Implementación\r\n\r\nEl frontend usa React 18 con Vite y consume la API con fetch. El backend separa routers, schemas y servicios. La autenticación usa JWT con `SECRET_KEY` y las contraseñas se almacenan con hash.\r\n\r\nEl despliegue del frontend está en Vercel; el backend en EC2. La base de datos no es accesible desde internet.\r\n\r\n## Resultado\r\n\r\n- CRUD funcional de ganado.\r\n- Autenticación con JWT.\r\n- Despliegue en Vercel + AWS.\r\n- Documentación de la arquitectura y variables de entorno.\r\n\r\nLo que falta:\r\n\r\n- Tests de integración del backend.\r\n- Migraciones formales con Alembic.\r\n- Observabilidad y backups automatizados.\r\n- Un dominio propio para la API.\r\n\r\n## Aprendizajes\r\n\r\n- La separación cliente-servidor se vuelve tangible cuando hay que desplegar.\r\n- La seguridad de infraestructura no es opcional: RDS privado, security groups y secrets.\r\n- Un monorepo ordena el trabajo en equipo, pero exige disciplina.\r\n\r\n## Qué haría diferente\r\n\r\n- Agregaría migraciones desde el primer commit.\r\n- Definiría un contrato OpenAPI compartido antes de escribir el frontend.\r\n- Automatizaría el despliegue del backend con un pipeline, no con pasos manuales.\r\n",
+      "gallery": [
+        {
+          "id": "5e3f7a1b-2c4d-4e5f-9a6b-3c4d5e6f7a8b",
+          "url": "https://media.ryuheirg.dev/mock/vaca-cubica.png",
+          "width": 1918,
+          "height": 825,
+          "mime_type": "image/png",
+          "size_bytes": 973540,
+          "alt": "Pantalla de inicio de sesión de Vaca Cúbica con un ternero y el formulario de acceso",
+          "blurhash": null,
+          "created_at": "2026-11-15T18:00:00Z"
+        }
+      ],
+      "github": null,
+      "role": "Full stack",
+      "team": [
+        "Ricardo Reyes Gómez",
+        "Erick de Jesús Nafate Nafate",
+        "Braulio Alejandro Jiménez"
+      ],
+      "learnings": [
+        "La separación cliente-servidor se vuelve tangible cuando hay que desplegar.",
+        "La seguridad de infraestructura no es opcional: RDS privado, security groups y secrets.",
+        "Un monorepo ordena el trabajo en equipo, pero exige disciplina."
+      ]
+    }
+  ],
+  "tags": [
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000001",
+      "slug": "astro",
+      "name": "Astro",
+      "description": "Sitios estáticos, islas y build time.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000002",
+      "slug": "fastapi",
+      "name": "FastAPI",
+      "description": "APIs en Python con tipos y documentación.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000003",
+      "slug": "arquitectura",
+      "name": "Arquitectura",
+      "description": "Decisiones, tradeoffs y sistemas que se entienden.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000004",
+      "slug": "cms",
+      "name": "CMS",
+      "description": "Contenido propio, sin dependencias innecesarias.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000005",
+      "slug": "python",
+      "name": "Python",
+      "description": "Datos, scripts y backend.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000006",
+      "slug": "datos",
+      "name": "Datos",
+      "description": "Ingesta, validación y análisis.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000007",
+      "slug": "bayes",
+      "name": "Bayes",
+      "description": "Inferencia probabilística aplicada.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000008",
+      "slug": "seguridad",
+      "name": "Seguridad",
+      "description": "Zero Trust, validación y superficie de ataque.",
+      "post_count": 2
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000009",
+      "slug": "kotlin",
+      "name": "Kotlin",
+      "description": "Android con Jetpack Compose.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000010",
+      "slug": "android",
+      "name": "Android",
+      "description": "Apps móviles y seguridad local.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000011",
+      "slug": "hibp",
+      "name": "HIBP",
+      "description": "Contraseñas filtradas sin exponerlas.",
+      "post_count": 1
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000012",
+      "slug": "frontend",
+      "name": "Frontend",
+      "description": "Interfaces, accesibilidad y rendimiento.",
+      "post_count": 0
+    },
+    {
+      "id": "a1b2c3d4-0001-4001-8001-000000000013",
+      "slug": "backend",
+      "name": "Backend",
+      "description": "APIs, bases de datos e infraestructura.",
+      "post_count": 0
+    }
+  ],
+  "landing": {
+    "hero": {
+      "eyebrow": "Ricardo Reyes Gómez / Full Stack + Security",
+      "title": "Ricardo Reyes Gómez",
+      "alias": "Ryoko",
+      "statement": "Desarrollador full stack. Estudiante. Zero Trust.",
+      "primary_cta": {
+        "label": "Ver proyectos",
+        "href": "/proyectos"
+      },
+      "secondary_cta": {
+        "label": "Leer el blog",
+        "href": "/blog"
+      },
+      "portrait": {
+        "id": "7d1a4c2e-8f3b-4a5d-9c6e-1b2a3c4d5e6f",
+        "url": "https://media.ryuheirg.dev/mock/portrait.jpeg",
+        "width": 972,
+        "height": 1296,
+        "mime_type": "image/jpeg",
+        "size_bytes": 116324,
+        "alt": "Retrato de Ricardo Reyes Gómez con suéter negro",
+        "blurhash": null,
+        "created_at": "2026-11-15T18:00:00Z"
+      }
+    },
+    "about": {
+      "title": "Sobre mí",
+      "body_md": "Soy Ricardo Reyes Gómez, estudiante de Ingeniería en Tecnologías de la Información e Innovación Digital en la Universidad Politécnica de Chiapas.\n\nConstruyo software full stack con enfoque en seguridad y arquitectura Zero Trust. Me gusta entender cómo funcionan las cosas por dentro, documentar las decisiones y dejar sistemas que otra persona pueda mantener.",
+      "photo": {
+        "id": "7d1a4c2e-8f3b-4a5d-9c6e-1b2a3c4d5e6f",
+        "url": "https://media.ryuheirg.dev/mock/portrait.jpeg",
+        "width": 972,
+        "height": 1296,
+        "mime_type": "image/jpeg",
+        "size_bytes": 116324,
+        "alt": "Retrato de Ricardo Reyes Gómez con suéter negro",
+        "blurhash": null,
+        "created_at": "2026-11-15T18:00:00Z"
+      },
+      "highlights": [
+        "Full stack",
+        "Security first",
+        "Clean code"
+      ],
+      "facts": [
+        {
+          "label": "Universidad",
+          "value": "UPChiapas"
+        },
+        {
+          "label": "Carrera",
+          "value": "ITID"
+        },
+        {
+          "label": "Semestre",
+          "value": "4.º cuatrimestre"
+        },
+        {
+          "label": "Ubicación",
+          "value": "Chiapas, México"
+        }
+      ],
+      "timeline": [
+        {
+          "year": 2025,
+          "title": "Inicio de la carrera en UPChiapas",
+          "description": "Primer contacto con desarrollo web, redes y sistemas operativos."
+        },
+        {
+          "year": 2026,
+          "title": "Frame-Data-Bayes, SecureUP y Vaca Cúbica",
+          "description": "Tres proyectos con datos, seguridad móvil y despliegue en AWS."
+        },
+        {
+          "year": 2026,
+          "title": "Certificaciones Cisco y AWS Academy",
+          "description": "Fundamentos de redes, sistemas operativos y nube."
+        },
+        {
+          "year": 2026,
+          "title": "Ryoko / portafolio y blog",
+          "description": "Este sitio: Astro, FastAPI y un CMS propio."
+        }
+      ]
+    },
+    "stack": [
+      {
+        "category": "Lenguajes",
+        "items": [
+          {
+            "name": "TypeScript",
+            "icon": "typescript"
+          },
+          {
+            "name": "JavaScript",
+            "icon": "javascript"
+          },
+          {
+            "name": "Python",
+            "icon": "python"
+          },
+          {
+            "name": "Kotlin",
+            "icon": null
+          },
+          {
+            "name": "C++",
+            "icon": "cpp"
+          },
+          {
+            "name": "SQL",
+            "icon": "mysql"
+          }
+        ]
+      },
+      {
+        "category": "Frontend",
+        "items": [
+          {
+            "name": "React",
+            "icon": "react"
+          },
+          {
+            "name": "Astro",
+            "icon": "astro"
+          },
+          {
+            "name": "Vite",
+            "icon": "vite"
+          },
+          {
+            "name": "Tailwind CSS",
+            "icon": "tailwind"
+          },
+          {
+            "name": "HTML5",
+            "icon": "html5"
+          },
+          {
+            "name": "CSS3",
+            "icon": "css3"
+          }
+        ]
+      },
+      {
+        "category": "Backend y datos",
+        "items": [
+          {
+            "name": "Node.js",
+            "icon": "node"
+          },
+          {
+            "name": "Express",
+            "icon": "express"
+          },
+          {
+            "name": "FastAPI",
+            "icon": null
+          },
+          {
+            "name": "MySQL",
+            "icon": "mysql"
+          },
+          {
+            "name": "PostgreSQL",
+            "icon": null
+          },
+          {
+            "name": "Redis",
+            "icon": "redis"
+          }
+        ]
+      },
+      {
+        "category": "Seguridad y DevOps",
+        "items": [
+          {
+            "name": "Docker",
+            "icon": "docker"
+          },
+          {
+            "name": "Nginx",
+            "icon": "nginx"
+          },
+          {
+            "name": "Git",
+            "icon": "git"
+          },
+          {
+            "name": "Linux",
+            "icon": "linux"
+          },
+          {
+            "name": "Ubuntu",
+            "icon": "ubuntu"
+          },
+          {
+            "name": "Postman",
+            "icon": "postman"
+          }
+        ]
+      },
+      {
+        "category": "Herramientas",
+        "items": [
+          {
+            "name": "Jest",
+            "icon": "jest"
+          },
+          {
+            "name": "VS Code",
+            "icon": "vscode"
+          },
+          {
+            "name": "Vercel",
+            "icon": "vercel"
+          },
+          {
+            "name": "Figma",
+            "icon": "figma"
+          }
+        ]
+      }
+    ],
+    "certifications": [
+      {
+        "title": "Operating Systems Support",
+        "issuer": "Cisco",
+        "date": "2026-03-23",
+        "url": null
+      },
+      {
+        "title": "Operating Systems Basics",
+        "issuer": "Cisco",
+        "date": "2026-02-13",
+        "url": null
+      },
+      {
+        "title": "AWS Academy Graduate - Cloud Foundations",
+        "issuer": "AWS Academy",
+        "date": "2025-11-21",
+        "url": null
+      },
+      {
+        "title": "Introduction to IoT",
+        "issuer": "Cisco",
+        "date": "2025-11-19",
+        "url": null
+      },
+      {
+        "title": "Networking Basics",
+        "issuer": "Cisco",
+        "date": "2025-10-26",
+        "url": null
+      }
+    ],
+    "contact": {
+      "title": "Hablemos",
+      "body": "¿Tienes una idea, una pregunta o una oportunidad? Escríbeme.",
+      "email": "hola@ryuheirg.dev",
+      "links": [
+        {
+          "label": "GitHub",
+          "url": "https://github.com/RyuheiRG",
+          "icon": "github"
+        },
+        {
+          "label": "LinkedIn",
+          "url": "https://www.linkedin.com/in/ryuhei-rg/",
+          "icon": "linkedin"
+        }
+      ]
+    }
+  },
+  "site": {
+    "site_name": "Ryoko",
+    "tagline": "Full Stack + Security",
+    "description": "Sitio personal de Ricardo Reyes Gómez (Ryoko): proyectos full stack, seguridad y notas técnicas.",
+    "url": "https://ryuheirg.dev",
+    "locale": "es-MX",
+    "author": {
+      "id": "1f2e3d4c-5b6a-4978-8e7d-6c5b4a3f2e1d",
+      "name": "Ricardo Reyes Gómez",
+      "alias": "Ryoko",
+      "avatar": {
+        "id": "7d1a4c2e-8f3b-4a5d-9c6e-1b2a3c4d5e6f",
+        "url": "https://media.ryuheirg.dev/mock/portrait.jpeg",
+        "width": 972,
+        "height": 1296,
+        "mime_type": "image/jpeg",
+        "size_bytes": 116324,
+        "alt": "Retrato de Ricardo Reyes Gómez con suéter negro",
+        "blurhash": null,
+        "created_at": "2026-11-15T18:00:00Z"
+      },
+      "bio": "Estudiante de ITID en UPChiapas. Full stack con enfoque en seguridad.",
+      "github_url": "https://github.com/RyuheiRG",
+      "linkedin_url": "https://www.linkedin.com/in/ryuhei-rg/"
+    },
+    "socials": [
+      {
+        "label": "GitHub",
+        "url": "https://github.com/RyuheiRG",
+        "icon": "github"
+      },
+      {
+        "label": "LinkedIn",
+        "url": "https://www.linkedin.com/in/ryuhei-rg/",
+        "icon": "linkedin"
+      },
+      {
+        "label": "RSS",
+        "url": "/rss.xml",
+        "icon": "rss"
+      },
+      {
+        "label": "Email",
+        "url": "mailto:hola@ryuheirg.dev",
+        "icon": "email"
+      }
+    ],
+    "nav": [
+      {
+        "label": "Blog",
+        "href": "/blog"
+      },
+      {
+        "label": "Proyectos",
+        "href": "/proyectos"
+      },
+      {
+        "label": "Sobre mí",
+        "href": "/sobre-mi"
+      }
+    ],
+    "footer": {
+      "note": "Construido con intención.",
+      "links": [
+        {
+          "label": "GitHub",
+          "href": "https://github.com/RyuheiRG"
+        },
+        {
+          "label": "LinkedIn",
+          "href": "https://www.linkedin.com/in/ryuhei-rg/"
+        },
+        {
+          "label": "RSS",
+          "href": "/rss.xml"
+        },
+        {
+          "label": "Privacidad",
+          "href": "/privacidad"
+        }
+      ]
+    },
+    "seo_defaults": {
+      "title": "Ryoko — Ricardo Reyes Gómez | Full Stack + Security",
+      "description": "Proyectos full stack, seguridad y notas técnicas de Ricardo Reyes Gómez, estudiante de ITID en UPChiapas.",
+      "og_image": "/og/home.png",
+      "canonical_url": null,
+      "noindex": false
+    },
+    "features": {
+      "ads_enabled": false
+    }
+  },
+  "media": {
+    "portrait": {
+      "id": "7d1a4c2e-8f3b-4a5d-9c6e-1b2a3c4d5e6f",
+      "url": "https://media.ryuheirg.dev/mock/portrait.jpeg",
+      "width": 972,
+      "height": 1296,
+      "mime_type": "image/jpeg",
+      "size_bytes": 116324,
+      "alt": "Retrato de Ricardo Reyes Gómez con suéter negro",
+      "blurhash": null,
+      "created_at": "2026-11-15T18:00:00Z"
+    },
+    "secureup": {
+      "id": "9b2c5d3f-1a4e-4f6b-8c7d-2e3f4a5b6c7d",
+      "url": "https://media.ryuheirg.dev/mock/secureup.png",
+      "width": 1080,
+      "height": 2400,
+      "mime_type": "image/png",
+      "size_bytes": 132804,
+      "alt": "Pantalla de inicio de SecureUP con Security Score de 70 sobre 100",
+      "blurhash": null,
+      "created_at": "2026-11-15T18:00:00Z"
+    },
+    "vacaCubica": {
+      "id": "5e3f7a1b-2c4d-4e5f-9a6b-3c4d5e6f7a8b",
+      "url": "https://media.ryuheirg.dev/mock/vaca-cubica.png",
+      "width": 1918,
+      "height": 825,
+      "mime_type": "image/png",
+      "size_bytes": 973540,
+      "alt": "Pantalla de inicio de sesión de Vaca Cúbica con un ternero comiendo pasto",
+      "blurhash": null,
+      "created_at": "2026-11-15T18:00:00Z"
+    },
+    "author": {
+      "id": "1f2e3d4c-5b6a-4978-8e7d-6c5b4a3f2e1d",
+      "name": "Ricardo Reyes Gómez",
+      "alias": "Ryoko",
+      "avatar": {
+        "id": "7d1a4c2e-8f3b-4a5d-9c6e-1b2a3c4d5e6f",
+        "url": "https://media.ryuheirg.dev/mock/portrait.jpeg",
+        "width": 972,
+        "height": 1296,
+        "mime_type": "image/jpeg",
+        "size_bytes": 116324,
+        "alt": "Retrato de Ricardo Reyes Gómez con suéter negro",
+        "blurhash": null,
+        "created_at": "2026-11-15T18:00:00Z"
+      },
+      "bio": "Estudiante de ITID en UPChiapas. Full stack con enfoque en seguridad.",
+      "github_url": "https://github.com/RyuheiRG",
+      "linkedin_url": "https://www.linkedin.com/in/ryuhei-rg/"
+    }
+  }
+}

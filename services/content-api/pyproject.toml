@@ -1,0 +1,30 @@
+[project]
+name = "ryoko-content-api"
+version = "0.1.0"
+description = "Content API for Ryoko: admin CRUD and read-only build endpoints."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "ryoko-common",
+  "alembic>=1.14",
+  "asyncpg>=0.30",
+  "boto3>=1.35",
+  "blurhash>=1.1",
+  "email-validator>=2.2",
+  "fastapi>=0.115",
+  "httpx>=0.28",
+  "pillow>=11.1",
+  "pillow-avif-plugin>=1.4",
+  "python-multipart>=0.0.20",
+  "sqlalchemy[asyncio]>=2.0.36",
+]
+
+[dependency-groups]
+dev = ["mypy>=1.13", "pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.8"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
