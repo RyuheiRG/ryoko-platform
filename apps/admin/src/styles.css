@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #090a0c;
+  --color-surface: #111316;
+  --color-surface-2: #17191d;
+  --color-bone: #f2f1ef;
+  --color-muted: #a5a6a8;
+  --color-faint: #6f7175;
+  --color-line: #2b2d31;
+  --color-line-strong: #3a3d42;
+  --color-crimson: #c1121f;
+  --color-red: #f04452;
+  --color-red-bright: #ff6b76;
+  --color-red-deep: #7a0c14;
+  --color-success: #3ddc97;
+  --color-warning: #f5b942;
+
+  --font-display: "Instrument Serif", Georgia, serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, monospace;
+
+  --text-hero: clamp(3.5rem, 9vw, 9rem);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-ink);
+    color: var(--color-bone);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: var(--color-red);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-red);
+    outline-offset: 3px;
+  }
+
+  input[type="datetime-local"],
+  input[type="date"] {
+    color-scheme: dark;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+}
+
+@layer components {
+  .label-mono {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .surface-grid {
+    background-image:
+      linear-gradient(to right, rgb(255 255 255 / 0.03) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(255 255 255 / 0.03) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+}
