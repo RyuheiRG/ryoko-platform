@@ -1,0 +1,186 @@
+name: ryoko-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ryoko}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ryoko}
+      POSTGRES_DB: ${POSTGRES_DB:-ryoko}
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ryoko} -d ${POSTGRES_DB:-ryoko}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  content-api:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.python
+      args:
+        SERVICE: content-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ryoko}:${POSTGRES_PASSWORD:-ryoko}@postgres:5432/${POSTGRES_DB:-ryoko}
+      REDIS_URL: redis://redis:6379/0
+      WEBHOOK_URL: http://webhook-api:8001/v1/events
+      MEDIA_DIR: /app/media
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-http://localhost:8000/media}
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000",
+      ]
+    volumes:
+      - media_data:/app/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  webhook-api:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.python
+      args:
+        SERVICE: webhook-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ryoko}:${POSTGRES_PASSWORD:-ryoko}@postgres:5432/${POSTGRES_DB:-ryoko}
+      REDIS_URL: redis://redis:6379/0
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8001",
+      ]
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8001/ready', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  metrics-api:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.python
+      args:
+        SERVICE: metrics-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ryoko}:${POSTGRES_PASSWORD:-ryoko}@postgres:5432/${POSTGRES_DB:-ryoko}
+      REDIS_URL: redis://redis:6379/0
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8002",
+      ]
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8002/ready', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+      args:
+        VITE_CONTENT_API_URL: ""
+        VITE_WEBHOOK_API_URL: /webhook-api
+        VITE_METRICS_API_URL: /metrics-api/graphql
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      content-api:
+        condition: service_healthy
+      webhook-api:
+        condition: service_healthy
+      metrics-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:

@@ -1,0 +1,42 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+apps/admin/dist/
+apps/admin/.vite/
+*.tsbuildinfo
+
+# Data and runtime
+media/
+media-test/
+infra/media/
+*.sqlite*
+*.db
+logs/
+coverage/
+playwright-report/
+test-results/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

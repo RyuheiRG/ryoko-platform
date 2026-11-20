@@ -1,0 +1,70 @@
+[project]
+name = "ryoko-platform"
+version = "0.1.0"
+description = "Ryoko CMS monorepo: three FastAPI services and an admin SPA."
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["packages/common", "services/content-api", "services/webhook-api", "services/metrics-api"]
+
+[tool.uv.sources]
+ryoko-common = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "mypy>=1.13",
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.8",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = [
+  "packages/common",
+  "services/content-api",
+  "services/webhook-api",
+  "services/metrics-api",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
+ignore = ["S101", "S105", "S106", "S311"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "S105", "S106"]
+"**/alembic/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+exclude = ["^services/[^/]+/alembic/"]
+
+[[tool.mypy.overrides]]
+module = [
+  "asyncpg",
+  "asyncpg.*",
+  "blurhash",
+  "blurhash.*",
+  "boto3",
+  "boto3.*",
+  "botocore",
+  "botocore.*",
+  "pillow_avif",
+  "pillow_avif.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["app.schema"]
+disallow_untyped_decorators = false
+
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["services"]
+norecursedirs = ["apps", ".venv", "__pycache__"]
