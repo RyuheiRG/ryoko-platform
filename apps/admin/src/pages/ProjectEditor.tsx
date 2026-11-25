@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { ArticlePreview } from "../components/ArticlePreview";
+import { MarkdownEditor } from "../components/MarkdownEditor";
 import { MediaPicker, useMediaOptions } from "../components/MediaPicker";
+import { SeoPreview } from "../components/SeoPreview";
 import {
   Badge,
   Button,
@@ -11,6 +14,7 @@ import {
   Field,
   FormActions,
   Input,
+  Modal,
   PageHeader,
   Select,
   Spinner,
@@ -18,14 +22,12 @@ import {
   statusTone,
 } from "../components/ui";
 import { api } from "../lib/api";
+import { copyText, downloadTextFile, safeFilename } from "../lib/download";
 import { errorMessage, formatDateTime } from "../lib/format";
-import {
-  type LifecycleStatus,
-  type Project,
-  dataSchema,
-  projectSchema,
-} from "../lib/schemas";
+import { useLocalDraft } from "../lib/localDraft";
+import { type LifecycleStatus, type Project, dataSchema, projectSchema } from "../lib/schemas";
 import { useToast } from "../lib/toast";
+import { ConfirmLeaveModal, useUnsavedChanges } from "../lib/unsaved";
 
 const projectEnvelopeSchema = dataSchema(projectSchema);
 
@@ -148,6 +150,13 @@ function buildPayload(form: ProjectForm) {
   };
 }
 
+function snapshot(form: ProjectForm): string {
+  return JSON.stringify({
+    ...buildPayload(form),
+    gallery_media_ids: form.gallery_media_ids,
+  });
+}
+
 function GalleryPicker({
   selected,
   onChange,
@@ -194,9 +203,13 @@ export function ProjectEditorPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const formRef = useRef<HTMLFormElement>(null);
 
   const [form, setForm] = useState<ProjectForm>(emptyForm);
   const [initialized, setInitialized] = useState(isNew);
+  const [baseline, setBaseline] = useState(() => snapshot(emptyForm));
+  const [draftBanner, setDraftBanner] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const query = useQuery({
@@ -208,9 +221,13 @@ export function ProjectEditorPage() {
     },
   });
 
+  const mediaQuery = useMediaOptions();
+
   useEffect(() => {
     if (query.data && !initialized) {
-      setForm(formFromProject(query.data));
+      const next = formFromProject(query.data);
+      setForm(next);
+      setBaseline(snapshot(next));
       setInitialized(true);
     }
   }, [query.data, initialized]);
@@ -219,9 +236,19 @@ export function ProjectEditorPage() {
     setForm((current) => ({ ...current, [key]: value }));
   };
 
+  const isDirty = initialized && snapshot(form) !== baseline;
+  const { blocker, allowNextNavigation } = useUnsavedChanges(isDirty);
+  const draftKey = `project.${id ?? "new"}`;
+  const {
+    draft,
+    clear: clearDraft,
+    restore,
+  } = useLocalDraft(draftKey, form, initialized && isDirty);
+
   const saveMutation = useMutation({
     mutationFn: async (publishAfter: boolean) => {
       const payload = buildPayload(form);
+      const savedSnapshot = snapshot(form);
       let projectId = id ?? "";
       if (!projectId) {
         const created = await api.post<unknown>("/v1/admin/projects", {
@@ -238,13 +265,17 @@ export function ProjectEditorPage() {
       if (publishAfter) {
         await api.post(`/v1/admin/projects/${projectId}/publish`);
       }
-      return { projectId, publishAfter };
+      return { projectId, publishAfter, savedSnapshot };
     },
-    onSuccess: async ({ projectId, publishAfter }) => {
+    onSuccess: async ({ projectId, publishAfter, savedSnapshot }) => {
+      setBaseline(savedSnapshot);
+      clearDraft();
+      setDraftBanner(false);
       await queryClient.invalidateQueries({ queryKey: ["projects"] });
       await queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       toast(publishAfter ? "Proyecto publicado." : "Proyecto guardado.", "success");
       if (!id) {
+        allowNextNavigation();
         navigate(`/projects/${projectId}`, { replace: true });
         setInitialized(true);
       }
@@ -262,7 +293,9 @@ export function ProjectEditorPage() {
       await queryClient.invalidateQueries({ queryKey: ["projects"] });
       await queryClient.invalidateQueries({ queryKey: ["project", id] });
       if (action === "archive") {
+        clearDraft();
         toast("Proyecto archivado.", "success");
+        allowNextNavigation();
         navigate("/projects");
         return;
       }
@@ -270,6 +303,41 @@ export function ProjectEditorPage() {
     },
     onError: (error) => setFormError(errorMessage(error)),
   });
+
+  const onRestoreDraft = () => {
+    const restored = restore();
+    if (!restored) {
+      toast("No se pudo leer el borrador local.", "error");
+      return;
+    }
+    setForm({ ...emptyForm, ...restored });
+    setDraftBanner(false);
+    toast("Borrador local restaurado.", "success");
+  };
+
+  const onDiscardDraft = () => {
+    clearDraft();
+    setDraftBanner(false);
+    toast("Borrador local descartado.");
+  };
+
+  const onCopyMarkdown = async () => {
+    try {
+      await copyText(form.case_study_md);
+      toast("Markdown copiado.", "success");
+    } catch (error) {
+      setFormError(errorMessage(error));
+    }
+  };
+
+  const onDownloadMarkdown = () => {
+    downloadTextFile(
+      `${safeFilename(form.slug || form.title, "proyecto")}.md`,
+      form.case_study_md,
+      "text/markdown;charset=utf-8",
+    );
+    toast("Markdown descargado.", "success");
+  };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -289,12 +357,42 @@ export function ProjectEditorPage() {
     saveMutation.mutate(false);
   };
 
+  const onFormKeyDown = (event: KeyboardEvent<HTMLFormElement>) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      formRef.current?.requestSubmit();
+    }
+  };
+
   if (query.isLoading) {
     return <Spinner label="Cargando proyecto…" />;
   }
 
   const project = query.data;
   const busy = saveMutation.isPending || actionMutation.isPending;
+  const cover = mediaQuery.data?.find((item) => item.id === form.cover_media_id);
+  const ogImage = mediaQuery.data?.find((item) => item.id === form.og_image_id);
+  const coverUrl = form.cover_media_id ? (cover?.url ?? project?.cover?.url ?? null) : null;
+  const ogImageUrl = ogImage?.url ?? coverUrl;
+  const stack = splitComma(form.stack);
+  const editorActions = (
+    <>
+      <Button size="sm" onClick={() => setPreviewOpen(true)}>
+        Vista previa
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={!form.case_study_md}
+        onClick={() => void onCopyMarkdown()}
+      >
+        Copiar MD
+      </Button>
+      <Button size="sm" variant="ghost" disabled={!form.case_study_md} onClick={onDownloadMarkdown}>
+        Descargar .md
+      </Button>
+    </>
+  );
 
   return (
     <div>
@@ -314,9 +412,7 @@ export function ProjectEditorPage() {
               <Badge tone={statusTone(project.publish_status)}>{project.publish_status}</Badge>
             ) : null}
             {project ? (
-              <Badge tone={statusTone(project.lifecycle_status)}>
-                {project.lifecycle_status}
-              </Badge>
+              <Badge tone={statusTone(project.lifecycle_status)}>{project.lifecycle_status}</Badge>
             ) : null}
             <Link to="/projects">
               <Button>Volver</Button>
@@ -325,80 +421,69 @@ export function ProjectEditorPage() {
         }
       />
 
+      {draft && draftBanner && initialized ? (
+        <div className="mb-4 flex flex-wrap items-center gap-3 border border-warning/50 bg-warning/5 px-4 py-3 text-sm text-warning">
+          <span>Hay un borrador local del {formatDateTime(draft.savedAt)}.</span>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={onRestoreDraft}>
+              Restaurar
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onDiscardDraft}>
+              Descartar
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {formError ? (
         <div className="mb-6 border border-red/50 bg-red/5 px-4 py-3 text-sm text-red-bright">
           {formError}
         </div>
       ) : null}
 
-      <form onSubmit={onSubmit} className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <form
+        ref={formRef}
+        onSubmit={onSubmit}
+        onKeyDown={onFormKeyDown}
+        className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]"
+      >
+        <Card className="p-5 xl:col-span-2">
+          <div className="space-y-4">
+            <Field label="Título">
+              <Input
+                value={form.title}
+                maxLength={120}
+                required
+                onChange={(event) => set("title", event.target.value)}
+              />
+            </Field>
+            <Field label="Slug" hint="Kebab-case. Si se deja vacío, la API lo genera.">
+              <Input
+                value={form.slug}
+                maxLength={200}
+                onChange={(event) => set("slug", event.target.value)}
+              />
+            </Field>
+            <Field label="Summary">
+              <Textarea
+                rows={3}
+                maxLength={240}
+                value={form.summary}
+                onChange={(event) => set("summary", event.target.value)}
+              />
+            </Field>
+            <MarkdownEditor
+              label="Case study Markdown"
+              hint="Problema, restricciones, decisiones, arquitectura y resultados."
+              rows={22}
+              value={form.case_study_md}
+              onChange={(value) => set("case_study_md", value)}
+              actions={editorActions}
+            />
+          </div>
+        </Card>
+
         <div className="space-y-4">
-          <Card className="p-5">
-            <div className="space-y-4">
-              <Field label="Título">
-                <Input
-                  value={form.title}
-                  maxLength={120}
-                  required
-                  onChange={(event) => set("title", event.target.value)}
-                />
-              </Field>
-              <Field label="Slug" hint="Kebab-case. Si se deja vacío, la API lo genera.">
-                <Input
-                  value={form.slug}
-                  maxLength={200}
-                  onChange={(event) => set("slug", event.target.value)}
-                />
-              </Field>
-              <Field label="Summary">
-                <Textarea
-                  rows={3}
-                  maxLength={240}
-                  value={form.summary}
-                  onChange={(event) => set("summary", event.target.value)}
-                />
-              </Field>
-              <Field
-                label="Case study Markdown"
-                hint="Problema, restricciones, decisiones, arquitectura y resultados."
-              >
-                <Textarea
-                  rows={22}
-                  className="font-mono text-xs leading-relaxed"
-                  value={form.case_study_md}
-                  onChange={(event) => set("case_study_md", event.target.value)}
-                />
-              </Field>
-            </div>
-          </Card>
-
-          <Card className="p-5">
-            <h2 className="font-display text-2xl text-bone">Case study metadata</h2>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <Field label="Rol">
-                <Input
-                  value={form.role}
-                  onChange={(event) => set("role", event.target.value)}
-                />
-              </Field>
-              <Field label="Equipo" hint="Separado por comas.">
-                <Input
-                  value={form.team}
-                  onChange={(event) => set("team", event.target.value)}
-                />
-              </Field>
-            </div>
-            <div className="mt-4">
-              <Field label="Aprendizajes" hint="Uno por línea.">
-                <Textarea
-                  rows={5}
-                  value={form.learnings}
-                  onChange={(event) => set("learnings", event.target.value)}
-                />
-              </Field>
-            </div>
-          </Card>
-
           <Card className="p-5">
             <h2 className="font-display text-2xl text-bone">SEO</h2>
             <div className="mt-4 space-y-4">
@@ -436,6 +521,37 @@ export function ProjectEditorPage() {
                 checked={form.seo_noindex}
                 onChange={(event) => set("seo_noindex", event.target.checked)}
               />
+              <div className="border-t border-line pt-4">
+                <SeoPreview
+                  title={form.seo_title || form.title}
+                  description={form.seo_description || form.summary}
+                  path={`/projects/${form.slug || project?.slug || "sin-slug"}`}
+                  canonical={form.seo_canonical}
+                  ogImageUrl={ogImageUrl}
+                  noindex={form.seo_noindex}
+                />
+              </div>
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <h2 className="font-display text-2xl text-bone">Case study metadata</h2>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <Field label="Rol">
+                <Input value={form.role} onChange={(event) => set("role", event.target.value)} />
+              </Field>
+              <Field label="Equipo" hint="Separado por comas.">
+                <Input value={form.team} onChange={(event) => set("team", event.target.value)} />
+              </Field>
+            </div>
+            <div className="mt-4">
+              <Field label="Aprendizajes" hint="Uno por línea.">
+                <Textarea
+                  rows={5}
+                  value={form.learnings}
+                  onChange={(event) => set("learnings", event.target.value)}
+                />
+              </Field>
             </div>
           </Card>
         </div>
@@ -527,10 +643,10 @@ export function ProjectEditorPage() {
                 value={form.cover_media_id}
                 onChange={(value) => set("cover_media_id", value)}
               />
-              {project?.cover ? (
+              {coverUrl ? (
                 <img
-                  src={project.cover.url}
-                  alt={project.cover.alt}
+                  src={coverUrl}
+                  alt={cover?.alt ?? project?.cover?.alt ?? form.title}
                   className="mt-3 aspect-[16/10] w-full border border-line object-cover"
                 />
               ) : null}
@@ -593,10 +709,32 @@ export function ProjectEditorPage() {
             {saveMutation.isPending ? "Guardando…" : "Guardar cambios"}
           </Button>
           <span className="text-xs text-faint">
-            {project ? `ID ${project.id}` : "Los cambios se guardan en la Content API."}
+            {project ? `ID ${project.id}` : "Los cambios se guardan en la Content API."} ·
+            Ctrl/Cmd+S guarda.
           </span>
         </FormActions>
       </form>
+
+      <Modal
+        open={previewOpen}
+        title="Vista previa del caso de estudio"
+        onClose={() => setPreviewOpen(false)}
+        size="xl"
+        footer={<Button onClick={() => setPreviewOpen(false)}>Cerrar</Button>}
+      >
+        <ArticlePreview
+          title={form.title}
+          excerpt={form.summary}
+          markdown={form.case_study_md}
+          coverUrl={coverUrl}
+          coverAlt={cover?.alt ?? project?.cover?.alt ?? null}
+          tags={stack}
+          kind="project"
+          meta={[String(form.year), form.role].filter(Boolean)}
+        />
+      </Modal>
+
+      <ConfirmLeaveModal blocker={blocker} />
     </div>
   );
 }
