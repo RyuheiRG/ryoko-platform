@@ -130,8 +130,15 @@ Admin en modo desarrollo (proxy Vite hacia `127.0.0.1:8000/8001/8002`):
 cd apps/admin
 pnpm install --frozen-lockfile
 pnpm dev        # http://localhost:5173
+pnpm lint       # ESLint
+pnpm test       # Vitest (utilidades puras)
 pnpm build      # typecheck estricto + build de producción
 ```
+
+El admin incluye editor Markdown con preview, toolbar, índice y estadísticas,
+borrador local con guard de cambios, SEO preview, export de Markdown y un dashboard
+con periodos, gráficas y export CSV. Detalle en
+[`docs/ADMIN-UX.md`](docs/ADMIN-UX.md).
 
 ## Contrato y autenticación
 
@@ -178,7 +185,7 @@ cd ../webhook-api && uv run pytest -q
 cd ../metrics-api && uv run pytest -q
 
 # Admin
-cd apps/admin && pnpm typecheck && pnpm build
+cd apps/admin && pnpm lint && pnpm test && pnpm typecheck && pnpm build
 ```
 
 Los tests usan bases de datos dedicadas (`ryoko_test_content`,
