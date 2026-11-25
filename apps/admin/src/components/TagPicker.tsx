@@ -5,6 +5,16 @@ import { dataSchema, type Tag, tagSchema } from "../lib/schemas";
 
 const tagsSchema = dataSchema(tagSchema.array());
 
+export function useTags() {
+  return useQuery({
+    queryKey: ["tags"],
+    queryFn: async () => {
+      const body = await api.get<unknown>("/v1/admin/tags");
+      return tagsSchema.parse(body).data;
+    },
+  });
+}
+
 export function TagPicker({
   selected,
   onChange,
@@ -12,13 +22,7 @@ export function TagPicker({
   selected: string[];
   onChange: (ids: string[]) => void;
 }) {
-  const query = useQuery({
-    queryKey: ["tags"],
-    queryFn: async () => {
-      const body = await api.get<unknown>("/v1/admin/tags");
-      return tagsSchema.parse(body).data;
-    },
-  });
+  const query = useTags();
 
   const toggle = (tag: Tag) => {
     if (selected.includes(tag.id)) {

@@ -1,9 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { MediaPicker } from "../components/MediaPicker";
-import { TagPicker } from "../components/TagPicker";
+import { ArticlePreview } from "../components/ArticlePreview";
+import { MarkdownEditor } from "../components/MarkdownEditor";
+import { MediaPicker, useMediaOptions } from "../components/MediaPicker";
+import { SeoPreview } from "../components/SeoPreview";
+import { TagPicker, useTags } from "../components/TagPicker";
 import {
   Badge,
   Button,
@@ -12,6 +15,7 @@ import {
   Field,
   FormActions,
   Input,
+  Modal,
   PageHeader,
   Select,
   Spinner,
@@ -19,14 +23,12 @@ import {
   statusTone,
 } from "../components/ui";
 import { api } from "../lib/api";
+import { copyText, downloadTextFile, safeFilename } from "../lib/download";
 import { errorMessage, formatDateTime } from "../lib/format";
-import {
-  type Post,
-  type PostType,
-  dataSchema,
-  postSchema,
-} from "../lib/schemas";
+import { useLocalDraft } from "../lib/localDraft";
+import { type Post, type PostType, dataSchema, postSchema } from "../lib/schemas";
 import { useToast } from "../lib/toast";
+import { ConfirmLeaveModal, useUnsavedChanges } from "../lib/unsaved";
 
 const postEnvelopeSchema = dataSchema(postSchema);
 
@@ -113,15 +115,23 @@ function buildPayload(form: PostForm) {
   };
 }
 
+function snapshot(form: PostForm): string {
+  return JSON.stringify({ ...buildPayload(form), scheduled_at: form.scheduled_at });
+}
+
 export function PostEditorPage() {
   const { id } = useParams<{ id: string }>();
   const isNew = !id;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const formRef = useRef<HTMLFormElement>(null);
 
   const [form, setForm] = useState<PostForm>(emptyForm);
   const [initialized, setInitialized] = useState(isNew);
+  const [baseline, setBaseline] = useState(() => snapshot(emptyForm));
+  const [draftBanner, setDraftBanner] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const query = useQuery({
@@ -133,9 +143,14 @@ export function PostEditorPage() {
     },
   });
 
+  const mediaQuery = useMediaOptions();
+  const tagsQuery = useTags();
+
   useEffect(() => {
     if (query.data && !initialized) {
-      setForm(formFromPost(query.data));
+      const next = formFromPost(query.data);
+      setForm(next);
+      setBaseline(snapshot(next));
       setInitialized(true);
     }
   }, [query.data, initialized]);
@@ -144,9 +159,19 @@ export function PostEditorPage() {
     setForm((current) => ({ ...current, [key]: value }));
   };
 
+  const isDirty = initialized && snapshot(form) !== baseline;
+  const { blocker, allowNextNavigation } = useUnsavedChanges(isDirty);
+  const draftKey = `post.${id ?? "new"}`;
+  const {
+    draft,
+    clear: clearDraft,
+    restore,
+  } = useLocalDraft(draftKey, form, initialized && isDirty);
+
   const saveMutation = useMutation({
     mutationFn: async (publishAfter: boolean) => {
       const payload = buildPayload(form);
+      const savedSnapshot = snapshot(form);
       let postId = id ?? "";
       if (!postId) {
         const created = await api.post<unknown>("/v1/admin/posts", payload);
@@ -157,13 +182,17 @@ export function PostEditorPage() {
       if (publishAfter) {
         await api.post(`/v1/admin/posts/${postId}/publish`);
       }
-      return { postId, publishAfter };
+      return { postId, publishAfter, savedSnapshot };
     },
-    onSuccess: async ({ postId, publishAfter }) => {
+    onSuccess: async ({ postId, publishAfter, savedSnapshot }) => {
+      setBaseline(savedSnapshot);
+      clearDraft();
+      setDraftBanner(false);
       await queryClient.invalidateQueries({ queryKey: ["posts"] });
       await queryClient.invalidateQueries({ queryKey: ["post", postId] });
       toast(publishAfter ? "Post publicado." : "Post guardado.", "success");
       if (!id) {
+        allowNextNavigation();
         navigate(`/posts/${postId}`, { replace: true });
         setInitialized(true);
       }
@@ -187,11 +216,14 @@ export function PostEditorPage() {
       await queryClient.invalidateQueries({ queryKey: ["post", id] });
       if (action === "duplicate" && duplicatedId) {
         toast("Copia creada como draft.", "success");
+        allowNextNavigation();
         navigate(`/posts/${duplicatedId}`);
         return;
       }
       if (action === "archive") {
+        clearDraft();
         toast("Post archivado.", "success");
+        allowNextNavigation();
         navigate("/posts");
         return;
       }
@@ -240,6 +272,41 @@ export function PostEditorPage() {
     }
   };
 
+  const onRestoreDraft = () => {
+    const restored = restore();
+    if (!restored) {
+      toast("No se pudo leer el borrador local.", "error");
+      return;
+    }
+    setForm({ ...emptyForm, ...restored });
+    setDraftBanner(false);
+    toast("Borrador local restaurado.", "success");
+  };
+
+  const onDiscardDraft = () => {
+    clearDraft();
+    setDraftBanner(false);
+    toast("Borrador local descartado.");
+  };
+
+  const onCopyMarkdown = async () => {
+    try {
+      await copyText(form.content_md);
+      toast("Markdown copiado.", "success");
+    } catch (error) {
+      setFormError(errorMessage(error));
+    }
+  };
+
+  const onDownloadMarkdown = () => {
+    downloadTextFile(
+      `${safeFilename(form.slug || form.title, "post")}.md`,
+      form.content_md,
+      "text/markdown;charset=utf-8",
+    );
+    toast("Markdown descargado.", "success");
+  };
+
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setFormError(null);
@@ -254,12 +321,44 @@ export function PostEditorPage() {
     saveMutation.mutate(false);
   };
 
+  const onFormKeyDown = (event: KeyboardEvent<HTMLFormElement>) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      formRef.current?.requestSubmit();
+    }
+  };
+
   if (query.isLoading) {
     return <Spinner label="Cargando post…" />;
   }
 
   const post = query.data;
   const busy = saveMutation.isPending || actionMutation.isPending || scheduleMutation.isPending;
+  const cover = mediaQuery.data?.find((item) => item.id === form.cover_media_id);
+  const ogImage = mediaQuery.data?.find((item) => item.id === form.og_image_id);
+  const coverUrl = form.cover_media_id ? (cover?.url ?? post?.cover?.url ?? null) : null;
+  const ogImageUrl = ogImage?.url ?? coverUrl;
+  const tagNames = (tagsQuery.data ?? [])
+    .filter((tag) => form.tag_ids.includes(tag.id))
+    .map((tag) => tag.name);
+  const editorActions = (
+    <>
+      <Button size="sm" onClick={() => setPreviewOpen(true)}>
+        Vista previa
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={!form.content_md}
+        onClick={() => void onCopyMarkdown()}
+      >
+        Copiar MD
+      </Button>
+      <Button size="sm" variant="ghost" disabled={!form.content_md} onClick={onDownloadMarkdown}>
+        Descargar .md
+      </Button>
+    </>
+  );
 
   return (
     <div>
@@ -275,7 +374,9 @@ export function PostEditorPage() {
         }
         actions={
           <>
-            {post ? <Badge tone={statusTone(post.publish_status)}>{post.publish_status}</Badge> : null}
+            {post ? (
+              <Badge tone={statusTone(post.publish_status)}>{post.publish_status}</Badge>
+            ) : null}
             {post?.scheduled_at ? (
               <Badge tone="warning">Programado {formatDateTime(post.scheduled_at)}</Badge>
             ) : null}
@@ -286,54 +387,67 @@ export function PostEditorPage() {
         }
       />
 
+      {draft && draftBanner && initialized ? (
+        <div className="mb-4 flex flex-wrap items-center gap-3 border border-warning/50 bg-warning/5 px-4 py-3 text-sm text-warning">
+          <span>Hay un borrador local del {formatDateTime(draft.savedAt)}.</span>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={onRestoreDraft}>
+              Restaurar
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onDiscardDraft}>
+              Descartar
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {formError ? (
         <div className="mb-6 border border-red/50 bg-red/5 px-4 py-3 text-sm text-red-bright">
           {formError}
         </div>
       ) : null}
 
-      <form onSubmit={onSubmit} className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="space-y-4">
-          <Card className="p-5">
-            <div className="space-y-4">
-              <Field label="Título">
-                <Input
-                  value={form.title}
-                  maxLength={120}
-                  required
-                  onChange={(event) => set("title", event.target.value)}
-                />
-              </Field>
-              <Field label="Slug" hint="Kebab-case. Si se deja vacío, la API lo genera.">
-                <Input
-                  value={form.slug}
-                  maxLength={200}
-                  placeholder="como-construi-ryoko"
-                  onChange={(event) => set("slug", event.target.value)}
-                />
-              </Field>
-              <Field label="Excerpt" hint="Resumen corto usado en listados y SEO.">
-                <Textarea
-                  rows={3}
-                  maxLength={240}
-                  value={form.excerpt}
-                  onChange={(event) => set("excerpt", event.target.value)}
-                />
-              </Field>
-              <Field
-                label="Contenido Markdown"
-                hint="CommonMark + GFM. El título va arriba, no dentro del contenido."
-              >
-                <Textarea
-                  rows={24}
-                  className="font-mono text-xs leading-relaxed"
-                  value={form.content_md}
-                  onChange={(event) => set("content_md", event.target.value)}
-                />
-              </Field>
-            </div>
-          </Card>
+      <form
+        ref={formRef}
+        onSubmit={onSubmit}
+        onKeyDown={onFormKeyDown}
+        className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]"
+      >
+        <Card className="p-5 xl:col-span-2">
+          <div className="space-y-4">
+            <Field label="Título">
+              <Input
+                value={form.title}
+                maxLength={120}
+                required
+                onChange={(event) => set("title", event.target.value)}
+              />
+            </Field>
+            <Field label="Slug" hint="Kebab-case. Si se deja vacío, la API lo genera.">
+              <Input
+                value={form.slug}
+                maxLength={200}
+                placeholder="como-construi-ryoko"
+                onChange={(event) => set("slug", event.target.value)}
+              />
+            </Field>
+            <Field label="Excerpt" hint="Resumen corto usado en listados y SEO.">
+              <Textarea
+                rows={3}
+                maxLength={240}
+                value={form.excerpt}
+                onChange={(event) => set("excerpt", event.target.value)}
+              />
+            </Field>
+            <MarkdownEditor
+              value={form.content_md}
+              onChange={(value) => set("content_md", value)}
+              actions={editorActions}
+            />
+          </div>
+        </Card>
 
+        <div className="space-y-4">
           <Card className="p-5">
             <h2 className="font-display text-2xl text-bone">SEO</h2>
             <div className="mt-4 space-y-4">
@@ -372,6 +486,16 @@ export function PostEditorPage() {
                 checked={form.seo_noindex}
                 onChange={(event) => set("seo_noindex", event.target.checked)}
               />
+              <div className="border-t border-line pt-4">
+                <SeoPreview
+                  title={form.seo_title || form.title}
+                  description={form.seo_description || form.excerpt}
+                  path={`/blog/${form.slug || post?.slug || "sin-slug"}`}
+                  canonical={form.seo_canonical}
+                  ogImageUrl={ogImageUrl}
+                  noindex={form.seo_noindex}
+                />
+              </div>
             </div>
           </Card>
         </div>
@@ -395,12 +519,7 @@ export function PostEditorPage() {
                 onChange={(event) => set("featured", event.target.checked)}
               />
               <div className="space-y-2 border-t border-line pt-4">
-                <Button
-                  type="submit"
-                  variant="primary"
-                  className="w-full"
-                  disabled={busy}
-                >
+                <Button type="submit" variant="primary" className="w-full" disabled={busy}>
                   {saveMutation.isPending ? "Guardando…" : "Guardar"}
                 </Button>
                 <Button
@@ -430,7 +549,7 @@ export function PostEditorPage() {
                       disabled={busy}
                       onClick={() => void onPreview()}
                     >
-                      Abrir preview
+                      Abrir preview guardado
                     </Button>
                     <Button
                       type="button"
@@ -507,10 +626,10 @@ export function PostEditorPage() {
                 onChange={(value) => set("cover_media_id", value)}
                 hint="Opcional. Sin portada, el frontend genera una tipográfica."
               />
-              {post?.cover ? (
+              {coverUrl ? (
                 <img
-                  src={post.cover.url}
-                  alt={post.cover.alt}
+                  src={coverUrl}
+                  alt={cover?.alt ?? post?.cover?.alt ?? form.title}
                   className="mt-3 aspect-[16/10] w-full border border-line object-cover"
                 />
               ) : null}
@@ -530,10 +649,32 @@ export function PostEditorPage() {
             {saveMutation.isPending ? "Guardando…" : "Guardar cambios"}
           </Button>
           <span className="text-xs text-faint">
-            {post ? `ID ${post.id}` : "Los cambios se guardan en la Content API."}
+            {post ? `ID ${post.id}` : "Los cambios se guardan en la Content API."} · Ctrl/Cmd+S
+            guarda.
           </span>
         </FormActions>
       </form>
+
+      <Modal
+        open={previewOpen}
+        title="Vista previa del artículo"
+        onClose={() => setPreviewOpen(false)}
+        size="xl"
+        footer={<Button onClick={() => setPreviewOpen(false)}>Cerrar</Button>}
+      >
+        <ArticlePreview
+          title={form.title}
+          excerpt={form.excerpt}
+          markdown={form.content_md}
+          coverUrl={coverUrl}
+          coverAlt={cover?.alt ?? post?.cover?.alt ?? null}
+          authorName={post?.author.name}
+          publishedAt={post?.published_at}
+          tags={tagNames}
+        />
+      </Modal>
+
+      <ConfirmLeaveModal blocker={blocker} />
     </div>
   );
 }
