@@ -1,6 +1,9 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Suspense, useEffect, useRef } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../lib/auth";
+import { bypassAllBlockers, hasDirtyEditor } from "../lib/unsaved";
+import { Spinner } from "./ui";
 
 const groups: Array<{ label: string; links: Array<{ to: string; label: string }> }> = [
   {
@@ -62,14 +65,37 @@ function Brand() {
 export function Layout() {
   const { session, signOut } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const mainRef = useRef<HTMLElement>(null);
+  const previousPath = useRef(location.pathname);
+
+  useEffect(() => {
+    if (previousPath.current === location.pathname) return;
+    previousPath.current = location.pathname;
+    window.scrollTo({ top: 0 });
+    mainRef.current?.focus({ preventScroll: true });
+  }, [location.pathname]);
 
   const onSignOut = async () => {
+    if (
+      hasDirtyEditor() &&
+      !window.confirm("Hay cambios sin guardar en un editor. ¿Cerrar sesión de todos modos?")
+    ) {
+      return;
+    }
+    bypassAllBlockers();
     await signOut();
     navigate("/login", { replace: true });
   };
 
   return (
     <div className="min-h-screen bg-ink">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:border focus:border-red focus:bg-surface focus:px-4 focus:py-2 focus:text-sm focus:text-bone"
+      >
+        Saltar al contenido
+      </a>
       <div className="flex items-center justify-between border-b border-line px-4 py-3 lg:hidden">
         <p className="font-display text-2xl text-bone">
           Ryoko<span className="text-red">.</span>
@@ -86,7 +112,10 @@ export function Layout() {
       <div className="lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
         <aside className="hidden border-r border-line bg-surface lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col">
           <Brand />
-          <nav aria-label="Navegación principal" className="flex-1 space-y-6 overflow-y-auto px-3 pb-6">
+          <nav
+            aria-label="Navegación principal"
+            className="flex-1 space-y-6 overflow-y-auto px-3 pb-6"
+          >
             {groups.map((group) => (
               <div key={group.label}>
                 <p className="label-mono mb-2 px-3 text-faint">{group.label}</p>
@@ -137,8 +166,15 @@ export function Layout() {
             ))}
           </nav>
 
-          <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-10 lg:py-10">
-            <Outlet />
+          <main
+            ref={mainRef}
+            id="main-content"
+            tabIndex={-1}
+            className="mx-auto w-full max-w-6xl px-4 py-8 focus:outline-none sm:px-6 lg:px-10 lg:py-10"
+          >
+            <Suspense fallback={<Spinner label="Cargando…" />}>
+              <Outlet />
+            </Suspense>
           </main>
         </div>
       </div>
