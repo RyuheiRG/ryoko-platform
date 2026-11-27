@@ -104,6 +104,7 @@ def test_track_event_deduplicates_event_id(client: TestClient, admin_token: str)
       query Dashboard($range: DateRangeInput!) {
         pageViews(range: $range) { total points { date value } }
         topPosts(range: $range, limit: 5) { slug title views }
+        projectViews(range: $range) { slug views }
         projectClicks(range: $range) { slug clicks }
         outboundClicks(range: $range, limit: 10) { url clicks }
         adMetrics(range: $range) { impressions clicks ctr }
@@ -152,7 +153,7 @@ def test_dashboard_queries_require_admin_jwt(client: TestClient, admin_token: st
     assert authorized.json()["data"]["pageViews"]["total"] >= 0
 
 
-def test_batch_tracking_and_batch_limit(client: TestClient) -> None:
+def test_batch_tracking_and_batch_limit(client: TestClient, admin_token: str) -> None:
     events = [
         _event(
             type="OUTBOUND_CLICK",
@@ -204,6 +205,27 @@ def test_batch_tracking_and_batch_limit(client: TestClient) -> None:
     )
     assert too_many.status_code == 200
     assert "20" in too_many.json()["errors"][0]["message"]
+
+    today = datetime.now(tz=UTC).date()
+    dashboard = _dashboard(
+        client,
+        admin_token,
+        """
+        query Dashboard($range: DateRangeInput!) {
+          projectViews(range: $range) { slug views }
+          projectClicks(range: $range) { slug clicks }
+        }
+        """,
+        {
+            "range": {
+                "from": f"{today - timedelta(days=1)}T00:00:00Z",
+                "to": f"{today + timedelta(days=1)}T00:00:00Z",
+            }
+        },
+    )
+    assert "errors" not in dashboard
+    assert {"slug": "secureup", "views": 1} in dashboard["data"]["projectViews"]
+    assert {"slug": "secureup", "clicks": 1} in dashboard["data"]["projectClicks"]
 
 
 def test_occurred_at_window(client: TestClient) -> None:

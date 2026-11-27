@@ -1065,6 +1065,11 @@ type ProjectClicks {
   clicks: Int!
 }
 
+type ProjectViews {
+  slug: String!
+  views: Int!
+}
+
 type OutboundClick {
   url: String!
   clicks: Int!
@@ -1079,6 +1084,7 @@ type AdMetrics {
 type Query {
   pageViews(range: DateRangeInput!, path: String): TimeSeries!
   topPosts(range: DateRangeInput!, limit: Int = 10): [TopPost!]!
+  projectViews(range: DateRangeInput!): [ProjectViews!]!
   projectClicks(range: DateRangeInput!): [ProjectClicks!]!
   outboundClicks(range: DateRangeInput!, limit: Int = 20): [OutboundClick!]!
   adMetrics(range: DateRangeInput!, ad_id: String): AdMetrics!
@@ -1150,6 +1156,10 @@ query Dashboard($range: DateRangeInput!) {
     title
     views
   }
+  projectViews(range: $range) {
+    slug
+    views
+  }
   projectClicks(range: $range) {
     slug
     clicks
@@ -1177,7 +1187,11 @@ query Dashboard($range: DateRangeInput!) {
 | `AD_IMPRESSION` | Solo si `features.ads_enabled` | `ad_id` |
 | `AD_CLICK` | Solo si `features.ads_enabled` | `ad_id` |
 
-`projectClicks` cuenta `OUTBOUND_CLICK` con `project_slug`; `PROJECT_VIEW` se consulta con `pageViews(path: "/proyectos/{slug}")`.
+`projectViews` cuenta `PROJECT_VIEW` por `project_slug`; `projectClicks` cuenta
+`OUTBOUND_CLICK` con `project_slug`. Navegar a un proyecto (por ejemplo desde una
+tarjeta del inicio) genera `PROJECT_VIEW`, no `OUTBOUND_CLICK`; el dashboard muestra
+ambas cifras por proyecto. También se puede consultar una ruta concreta con
+`pageViews(path: "/proyectos/{slug}")`.
 
 Implementación frontend:
 
