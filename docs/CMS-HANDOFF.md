@@ -220,6 +220,7 @@ Queries:
 ```graphql
 pageViews(range: DateRangeInput!, path: String): TimeSeries!
 topPosts(range: DateRangeInput!, limit: Int = 10): [TopPost!]!
+projectViews(range: DateRangeInput!): [ProjectViews!]!
 projectClicks(range: DateRangeInput!): [ProjectClicks!]!
 outboundClicks(range: DateRangeInput!, limit: Int = 20): [OutboundClick!]!
 adMetrics(range: DateRangeInput!, ad_id: String): AdMetrics!

@@ -99,6 +99,12 @@ class ProjectClicks:
 
 
 @strawberry.type
+class ProjectViews:
+    slug: str
+    views: int
+
+
+@strawberry.type
 class OutboundClick:
     url: str
     clicks: int
@@ -332,6 +338,29 @@ class Query:
             return [
                 TopPost(slug=str(row[0]), title=None, views=int(row[1])) for row in rows if row[0]
             ]
+
+    @strawberry.field(name="projectViews")
+    async def project_views(
+        self, info: Info[Any, Any], range: DateRangeInput
+    ) -> list[ProjectViews]:
+        _require_admin(info)
+        async with _lock(info):
+            start, end = _validate_range(range)
+            session = _session(info)
+            rows = (
+                await session.execute(
+                    select(MetricsEvent.project_slug, func.count().label("views"))
+                    .where(
+                        MetricsEvent.received_at >= start,
+                        MetricsEvent.received_at <= end,
+                        MetricsEvent.event_type == "PROJECT_VIEW",
+                        MetricsEvent.project_slug.is_not(None),
+                    )
+                    .group_by(MetricsEvent.project_slug)
+                    .order_by(func.count().desc())
+                )
+            ).all()
+            return [ProjectViews(slug=str(row[0]), views=int(row[1])) for row in rows if row[0]]
 
     @strawberry.field(name="projectClicks")
     async def project_clicks(
