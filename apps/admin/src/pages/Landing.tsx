@@ -55,6 +55,58 @@ function parseStackItems(value: string): StackCategory["items"] {
   });
 }
 
+function serializeStackItems(items: StackCategory["items"]): string {
+  return items.map((item) => (item.icon ? `${item.name}:${item.icon}` : item.name)).join("\n");
+}
+
+function serializeLines(lines: string[]): string {
+  return lines.join("\n");
+}
+
+/**
+ * The textarea keeps its own raw text. Deriving `value` from the parsed list on
+ * every keystroke strips separators (a trailing `:`) or newlines and moves the
+ * caret to the end, which made `name:icon` and multi-line lists impossible to
+ * type.
+ */
+function RawListTextarea<T>({
+  items,
+  parse,
+  serialize,
+  onChange,
+  rows = 4,
+  className = "",
+}: {
+  items: T;
+  parse: (value: string) => T;
+  serialize: (items: T) => string;
+  onChange: (items: T) => void;
+  rows?: number;
+  className?: string;
+}) {
+  const [value, setValue] = useState(() => serialize(items));
+
+  useEffect(() => {
+    setValue((current) => {
+      const parsed = parse(current);
+      return serialize(parsed) === serialize(items) ? current : serialize(items);
+    });
+  }, [items, parse, serialize]);
+
+  return (
+    <Textarea
+      rows={rows}
+      className={className}
+      value={value}
+      onChange={(event) => {
+        const next = event.target.value;
+        setValue(next);
+        onChange(parse(next));
+      }}
+    />
+  );
+}
+
 export function LandingPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -319,12 +371,12 @@ export function LandingPage() {
               />
             </div>
             <Field label="Highlights" hint="Uno por línea.">
-              <Textarea
+              <RawListTextarea
+                items={draft.about.highlights}
+                parse={splitLines}
+                serialize={serializeLines}
+                onChange={(highlights) => updateAbout({ highlights })}
                 rows={4}
-                value={draft.about.highlights.join("\n")}
-                onChange={(event) =>
-                  updateAbout({ highlights: splitLines(event.target.value) })
-                }
               />
             </Field>
 
@@ -498,15 +550,12 @@ export function LandingPage() {
                   />
                 </Field>
                 <Field label="Items" hint="name:icon por línea, por ejemplo TypeScript:typescript.">
-                  <Textarea
-                    rows={4}
+                  <RawListTextarea
+                    items={category.items}
+                    parse={parseStackItems}
+                    serialize={serializeStackItems}
+                    onChange={(items) => updateStack(index, { items })}
                     className="font-mono text-xs"
-                    value={category.items
-                      .map((item) => (item.icon ? `${item.name}:${item.icon}` : item.name))
-                      .join("\n")}
-                    onChange={(event) =>
-                      updateStack(index, { items: parseStackItems(event.target.value) })
-                    }
                   />
                 </Field>
                 <Button
