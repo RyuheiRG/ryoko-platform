@@ -32,6 +32,7 @@ import {
   startOfUtcDay,
   todayIsoDate,
 } from "../lib/format";
+import { buildProjectActivity } from "../lib/projects";
 import { dashboardSchema } from "../lib/schemas";
 import { useToast } from "../lib/toast";
 
@@ -39,6 +40,7 @@ const DASHBOARD_QUERY = `
   query Dashboard($range: DateRangeInput!) {
     pageViews(range: $range) { total points { date value } }
     topPosts(range: $range, limit: 20) { slug title views }
+    projectViews(range: $range) { slug views }
     projectClicks(range: $range) { slug clicks }
     outboundClicks(range: $range, limit: 20) { url clicks }
     adMetrics(range: $range) { impressions clicks ctr }
@@ -107,12 +109,15 @@ export function DashboardPage() {
     return posts.slice(0, postLimit);
   }, [data, postSearch, postLimit]);
 
+  const projectActivity = useMemo(() => (data ? buildProjectActivity(data) : []), [data]);
+
   const topPostsViews = (data?.topPosts ?? []).reduce((sum, post) => sum + post.views, 0);
   const hasTraffic = Boolean(
     data &&
     (data.pageViews.total > 0 ||
       data.realtime > 0 ||
       data.topPosts.length > 0 ||
+      data.projectViews.length > 0 ||
       data.projectClicks.length > 0 ||
       data.outboundClicks.length > 0 ||
       data.adMetrics.impressions > 0 ||
@@ -175,7 +180,7 @@ export function DashboardPage() {
 
       {data ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Páginas vistas"
               value={formatNumber(data.pageViews.total)}
@@ -238,7 +243,7 @@ export function DashboardPage() {
                 <ViewsChart points={data.pageViews.points} mode={chartMode} />
               </Card>
 
-              <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <Card>
                   <div className="flex items-center justify-between border-b border-line px-5 py-4">
                     <h2 className="font-display text-2xl text-bone">Top posts</h2>
@@ -283,8 +288,8 @@ export function DashboardPage() {
                   )}
                 </Card>
 
-                <Card className="p-5">
-                  <div className="flex items-start justify-between gap-2">
+                <Card className="@container p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <h2 className="font-display text-2xl text-bone">Distribución de views</h2>
                       <p className="text-xs text-muted">Top posts del periodo</p>
@@ -304,37 +309,63 @@ export function DashboardPage() {
                 </Card>
               </div>
 
-              <div className="mt-4 grid gap-4 xl:grid-cols-2">
+              <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <Card>
-                  <div className="flex items-center justify-between border-b border-line px-5 py-4">
-                    <h2 className="font-display text-2xl text-bone">Clicks por proyecto</h2>
-                    <span className="label-mono text-faint">Salidas</span>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-4">
+                    <div>
+                      <h2 className="font-display text-2xl text-bone">Proyectos</h2>
+                      <p className="text-xs text-muted">Vistas y salidas externas del periodo</p>
+                    </div>
+                    <span className="label-mono text-faint">Vistas / salidas</span>
                   </div>
-                  {data.projectClicks.length === 0 ? (
-                    <EmptyState title="Sin clicks salientes" />
+                  {projectActivity.length === 0 ? (
+                    <EmptyState title="Sin actividad en proyectos" />
                   ) : (
-                    <RankingBars
-                      items={data.projectClicks.map((project) => ({
-                        label: project.slug,
-                        value: project.clicks,
-                      }))}
-                    />
+                    <Table
+                      caption="Vistas y salidas externas por proyecto"
+                      tableClassName="min-w-0"
+                    >
+                      <THead>
+                        <TRow>
+                          <TH>Slug</TH>
+                          <TH className="whitespace-nowrap text-right">Vistas</TH>
+                          <TH className="whitespace-nowrap text-right">Salidas</TH>
+                        </TRow>
+                      </THead>
+                      <tbody>
+                        {projectActivity.map((project) => (
+                          <TRow key={project.slug}>
+                            <TCell>
+                              <span className="break-all font-mono text-xs text-bone">
+                                {project.slug}
+                              </span>
+                            </TCell>
+                            <TCell className="text-right font-mono text-xs text-muted">
+                              {formatNumber(project.views)}
+                            </TCell>
+                            <TCell className="text-right font-mono text-xs text-red-bright">
+                              {formatNumber(project.clicks)}
+                            </TCell>
+                          </TRow>
+                        ))}
+                      </tbody>
+                    </Table>
                   )}
                 </Card>
 
                 <Card>
-                  <div className="flex items-center justify-between border-b border-line px-5 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-4">
                     <h2 className="font-display text-2xl text-bone">Salidas externas</h2>
                     <span className="label-mono text-faint">Top 20</span>
                   </div>
                   {data.outboundClicks.length === 0 ? (
                     <EmptyState title="Sin salidas registradas" />
                   ) : (
-                    <Table caption="URLs externas más clickeadas">
+                    <Table caption="URLs externas más clickeadas" tableClassName="min-w-0">
                       <THead>
                         <TRow>
                           <TH>URL</TH>
-                          <TH className="text-right">Clicks</TH>
+                          <TH className="whitespace-nowrap text-right">Clicks</TH>
                         </TRow>
                       </THead>
                       <tbody>
@@ -361,7 +392,7 @@ export function DashboardPage() {
                 <p className="mt-1 text-sm text-muted">
                   Métricas de impresiones y clicks del periodo seleccionado.
                 </p>
-                <dl className="mt-6 grid grid-cols-3 gap-3">
+                <dl className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="border border-line bg-ink p-4">
                     <dt className="label-mono text-faint">Impr.</dt>
                     <dd className="mt-2 font-display text-3xl text-bone">

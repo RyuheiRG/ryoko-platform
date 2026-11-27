@@ -301,6 +301,7 @@ export const dashboardSchema = z.object({
   topPosts: z.array(
     z.object({ slug: z.string(), title: z.string().nullable(), views: z.number() }),
   ),
+  projectViews: z.array(z.object({ slug: z.string(), views: z.number() })),
   projectClicks: z.array(z.object({ slug: z.string(), clicks: z.number() })),
   outboundClicks: z.array(z.object({ url: z.string(), clicks: z.number() })),
   adMetrics: z.object({ impressions: z.number(), clicks: z.number(), ctr: z.number() }),

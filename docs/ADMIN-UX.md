@@ -102,11 +102,13 @@ Archivos principales:
   Se piden 20 posts a la API y el filtro es local.
 - **Distribución**: donut de views de los top posts (máximo 6 segmentos; el resto se
   agrupa como “Otros”). No mezcla unidades.
-- **Clicks por proyecto**: barras sobre `projectClicks`.
+- **Proyectos**: tabla que combina `projectViews` y `projectClicks` por slug.
+  Navegar a un proyecto cuenta como vista; solo los enlaces externos cuentan como
+  salida.
 - **Salidas externas**: tabla sobre `outboundClicks` (top 20).
 - **Anuncios**: impresiones, clicks y CTR de `adMetrics`.
-- **CSV**: exporta resumen, serie diaria, top posts, clicks por proyecto, salidas
-  externas y anuncios, con BOM UTF-8 para Excel.
+- **CSV**: exporta resumen, serie diaria, top posts, vistas/salidas por proyecto,
+  salidas externas y anuncios, con BOM UTF-8 para Excel.
 - **Estado vacío**: si no hay eventos, se explica cómo se llena el dashboard
   (`METRICS_SITE_KEY`) en lugar de mostrar gráficas rotas.
 - **Sin cambios de backend**: no se añadieron resolvers, campos, migraciones ni

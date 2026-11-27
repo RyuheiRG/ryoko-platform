@@ -154,7 +154,7 @@ export function statusTone(status: string): BadgeTone {
 }
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`border border-line bg-surface ${className}`}>{children}</div>;
+  return <div className={`min-w-0 border border-line bg-surface ${className}`}>{children}</div>;
 }
 
 export function PageHeader({
@@ -180,10 +180,20 @@ export function PageHeader({
   );
 }
 
-export function Table({ children, caption }: { children: ReactNode; caption?: string }) {
+export function Table({
+  children,
+  caption,
+  className = "",
+  tableClassName = "min-w-[640px]",
+}: {
+  children: ReactNode;
+  caption?: string;
+  className?: string;
+  tableClassName?: string;
+}) {
   return (
-    <div className="overflow-x-auto border border-line bg-surface">
-      <table className="w-full min-w-[640px] text-left text-sm">
+    <div className={`overflow-x-auto border border-line bg-surface ${className}`}>
+      <table className={`w-full text-left text-sm ${tableClassName}`}>
         {caption ? <caption className="sr-only">{caption}</caption> : null}
         {children}
       </table>

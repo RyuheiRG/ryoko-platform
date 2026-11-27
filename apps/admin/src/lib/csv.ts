@@ -1,3 +1,4 @@
+import { buildProjectActivity } from "./projects";
 import type { DashboardData } from "./schemas";
 
 export type CsvValue = string | number | null | undefined;
@@ -42,9 +43,13 @@ export function buildDashboardCsv(
       ...data.topPosts.map((post) => [post.slug, post.title ?? "", post.views]),
     ],
     [
-      ["Clicks por proyecto"],
-      ["Slug", "Clicks"],
-      ...data.projectClicks.map((project) => [project.slug, project.clicks]),
+      ["Proyectos"],
+      ["Slug", "Vistas", "Salidas"],
+      ...buildProjectActivity(data).map((project) => [
+        project.slug,
+        project.views,
+        project.clicks,
+      ]),
     ],
     [
       ["Salidas externas"],

@@ -179,7 +179,7 @@ export function DonutChart({
   let offset = 0;
 
   return (
-    <div className="mt-4 flex flex-col items-center gap-5 sm:flex-row">
+    <div className="mt-4 flex flex-col items-center gap-5 @md:flex-row">
       <svg
         viewBox={`0 0 ${size} ${size}`}
         className="h-40 w-40 shrink-0"
@@ -238,7 +238,7 @@ export function DonutChart({
         </text>
       </svg>
 
-      <ul className="w-full space-y-2">
+      <ul className="w-full min-w-0 space-y-2 @md:flex-1">
         {shown.map((item, index) => (
           <li key={item.label} className="flex items-center justify-between gap-3 text-sm">
             <span className="flex min-w-0 items-center gap-2">
